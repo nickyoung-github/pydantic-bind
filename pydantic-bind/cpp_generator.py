@@ -52,7 +52,6 @@ def cpp_default(value: Any) -> str | None:
 
 def cpp_type(typ) -> Tuple[str, Set[str]]:
     def args_type(base_type: str) -> Tuple[str, Set[str]]:
-
         optional = False
         real_args = ()
 
@@ -153,6 +152,8 @@ def generate_class(model_class: BaseModelNoCopy):
         struct_members.insert(position, f"{typ} {name};")
         pydantic_attrs.insert(position, f'{pydantic_def}("{name}", &{cls_name}::{name})')
 
+    # ToDo: wrap lines
+
     struct_def = f"""struct {cls_name} : public Base
 {{
     {cls_name}({', '.join(constructor_args)}) :
@@ -233,7 +234,6 @@ PYBIND11_MODULE({namespace}, m)
 """
 
     with Path(output_dir, f"{cls_name}.h").open("w") as header_file:
-        print(f"ARSE {header_file.name}")
         header_file.write(header_contents)
 
     with Path(output_dir, f"{cls_name}.cpp").open("w") as cpp_file:
@@ -245,6 +245,6 @@ if __name__ == "__main__":
     parser.add_argument("-m", "--module", type=str, required=True)
     parser.add_argument("-n", "--namespace", type=str, required=True)
     parser.add_argument("-o", "--output_dir", type=str, required=True)
-    args = parser.parse_args()
+    cl_args = parser.parse_args()
 
-    generate_module(args.module, args.namespace, args.output_dir)
+    generate_module(cl_args.module, cl_args.namespace, cl_args.output_dir)
