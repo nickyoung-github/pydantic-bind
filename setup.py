@@ -5,7 +5,7 @@ setup(name='pydantic_bind',
       description='C++/pybind generation from Pydantic classes',
       author='Nick Young',
       packages=['pydantic_bind'],
-      requirements=[
+      requires=[
           "pydantic>=2.0.2",
           "pybind11"
       ])
