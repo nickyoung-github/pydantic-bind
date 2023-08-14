@@ -4,12 +4,14 @@ import datetime as dt
 from importlib import import_module
 from inspect import isclass
 from pathlib import Path
+from pydantic import BaseModel
+from pydantic._internal._model_construction import ModelMetaclass
 from pydantic_core import PydanticUndefined
 from textwrap import indent
 from types import UnionType
 from typing import Any, Optional, Set, Tuple, Union, get_origin, get_args
 
-from pydantic_bind.base import BaseModelNoCopy
+from pydantic_bind.base import BaseModelNoCopy, ModelMetaclassNoCopy
 
 
 __base_type_mappings = {
@@ -125,7 +127,15 @@ def cpp_type(typ) -> Tuple[str, Set[str]]:
             raise RuntimeError(f"Cannot handle type {typ}")
 
 
-def generate_class(model_class: BaseModelNoCopy):
+def generate_class(model_class: ModelMetaclass):
+    def field_info_iter():
+        if issubclass(model_class, ModelMetaclassNoCopy):
+            for field_name, field in model_class._pydantic_decorators__.computed_fields.items():
+                yield field_name, field.return_type, field.default
+        else:
+            for field_name, field in model_class.model_fields.items():
+                yield field_name, field.type, field.default
+
     types = []
     kwargs = []
     constructor_args = []
@@ -137,12 +147,12 @@ def generate_class(model_class: BaseModelNoCopy):
     cls_name = model_class.__name__
     newline = "\n    "
 
-    for name, field in model_class.__pydantic_decorators__.computed_fields.items():
-        typ, includes = cpp_type(field.info.return_type)
+    for name, field_type, default in field_info_iter():
+        typ, includes = cpp_type(field_type)
         all_includes.update(includes)
-        default = cpp_default(field.info.default)
+        default = cpp_default(default)
         default_suffix = f'={default}' if default else ""
-        move = field.info.return_type not in __no_move_types
+        move = field_type not in __no_move_types
         position = len(types) if default else 0  # Need to ensure non-defaulted params are first
 
         constructor_args.insert(position, f"{typ} {name + default_suffix}")
@@ -192,8 +202,7 @@ def generate_module(module_name: str, output_dir: str):
     struct_defs = []
     pydantic_defs = []
 
-    for model_class in (v for v in vars(module).values()
-                        if isclass(v) and issubclass(v, BaseModelNoCopy) and v is not BaseModelNoCopy):
+    for model_class in (v for v in vars(module).values() if isclass(v) and issubclass(v, BaseModel)):
         if model_class.__pydantic_decorators__.computed_fields:
             struct, pydantic, struct_includes = generate_class(model_class)
             struct_defs.append(struct)
