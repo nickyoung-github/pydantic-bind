@@ -10,6 +10,25 @@ import sys
 from typing import Any, Dict, List, Type, cast
 
 
+def get_pybind_type(typ: ModelMetaclass) -> type:
+    """
+    Return the generated pybind type corresponding to the BaseNodel-derived type
+
+    :param typ: A Pydantic BaseModel-derived type
+    :return: The corresponding, generated pybind type
+    """
+
+    module_parts = typ.__module__.split(".")
+    module_parts.insert(-1, "__pybind__")
+    pybind_module = ".".join(module_parts)
+
+    module = sys.modules.get(pybind_module)
+    if not module:
+        module = import_module(pybind_module)
+
+    return getattr(module, typ.__name__)
+
+
 @slots_dataclass
 class PropertyFieldInfo(ComputedFieldInfo):
     default: Any = PydanticUndefined
@@ -123,25 +142,6 @@ def json_schema_extra(schema: Dict[str, Any], model_class: ModelMetaclassNoCopy)
         properties[alias] = field_schema
 
 
-def get_pybind_type(typ: ModelMetaclass) -> type:
-    """
-    Return the generated pybind type corresponding to the BaseNodel-derived type
-
-    :param typ: A Pydantic BaseModel-derived type
-    :return: The corresponding, generated pybind type
-    """
-
-    module_parts = typ.__module__.split(".")
-    module_parts.insert(-1, "__pybind__")
-    pybind_module = ".".join(module_parts)
-
-    module = sys.modules.get(pybind_module)
-    if not module:
-        module = import_module(pybind_module)
-
-    return getattr(module, typ.__name__)
-
-
 class BaseModel(PydanticBaseModel):
 
     def model_post_init(self, __context: Any):
@@ -155,7 +155,7 @@ class BaseModel(PydanticBaseModel):
             get_pybind_type(type(self))(**{name: getattr(self, name) for name in self.model_fields.keys()})
 
 
-class BaseModelNoCopy(PydanticBaseModel, metaclass=ModelMetaclass):
+class BaseModelNoCopy(PydanticBaseModel, metaclass=ModelMetaclassNoCopy):
     model_config = ConfigDict(json_schema_extra=json_schema_extra)
 
     @property
