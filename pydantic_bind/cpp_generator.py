@@ -172,6 +172,8 @@ def generate_class(model_class: BaseModelNoCopy):
 
 
 def generate_module(module_name: str, output_dir: str):
+    # ToDo: Handle enums
+
     newline = "\n\n"
     dot = r'.'
     slash = r'/'
