@@ -1,5 +1,7 @@
 from setuptools import find_packages, setup
 
+# ToDo: Add versioneer
+
 setup(name="pydantic_bind",
       version="1.1.1",
       description="C++/pybind generation from Pydantic classes",
