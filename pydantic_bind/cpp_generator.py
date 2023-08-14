@@ -9,7 +9,7 @@ from textwrap import indent
 from types import UnionType
 from typing import Any, Optional, Set, Tuple, Union, get_origin, get_args
 
-from .base import BaseModelNoCopy
+from pydantic_bind.base import BaseModelNoCopy
 
 
 __base_type_mappings = {
@@ -154,7 +154,7 @@ def generate_class(model_class: BaseModelNoCopy):
 
     # ToDo: wrap lines
 
-    struct_def = f"""struct {cls_name} : public Base
+    struct_def = f"""struct {cls_name}
 {{
     {cls_name}({', '.join(constructor_args)}) :
         {', '.join(init_args)}
@@ -171,7 +171,7 @@ def generate_class(model_class: BaseModelNoCopy):
     return struct_def, pydantic_def, tuple(f"#include {i}" for i in sorted(all_includes))
 
 
-def generate_module(module_name: str, namespace: str, output_dir: str):
+def generate_module(module_name: str, output_dir: str):
     newline = "\n\n"
     dot = r'.'
     slash = r'/'
@@ -179,11 +179,12 @@ def generate_module(module_name: str, namespace: str, output_dir: str):
     module = import_module(module_name)
     generated_root = Path(output_dir)
     self_include = f'#include "{module_name.replace(dot, slash)}.h"'
-    cls_name = module.__name__.split('.')[-1]
-    guard = f"{namespace.upper()}_{cls_name.upper()}_H"
+    module_base_name = module.__name__.split('.')[-1]
+    namespace = module.__name__.split('.')[0]
+    guard = f"{namespace.upper()}_{module_base_name.upper()}_H"
 
     if not generated_root.exists():
-        generated_root.mkdir()
+        generated_root.mkdir(parents=True, exist_ok=True)
 
     includes = set()
     struct_defs = []
@@ -191,10 +192,11 @@ def generate_module(module_name: str, namespace: str, output_dir: str):
 
     for model_class in (v for v in vars(module).values()
                         if isclass(v) and issubclass(v, BaseModelNoCopy) and v is not BaseModelNoCopy):
-        struct, pydantic, struct_includes = generate_class(model_class)
-        struct_defs.append(struct)
-        pydantic_defs.append(pydantic)
-        includes = includes.union(struct_includes)
+        if model_class.__pydantic_decorators__.computed_fields:
+            struct, pydantic, struct_includes = generate_class(model_class)
+            struct_defs.append(struct)
+            pydantic_defs.append(pydantic)
+            includes = includes.union(struct_includes)
 
     if self_include in includes:
         includes.remove(self_include)
@@ -204,8 +206,6 @@ def generate_module(module_name: str, namespace: str, output_dir: str):
 #define {guard}
 
 {newline.join(includes)}
-
-#include "../../common/base.h"
 
 namespace {namespace}
 {{
@@ -221,30 +221,29 @@ namespace {namespace}
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "{cls_name}.h"
+#include "{module_base_name}.h"
 
 namespace py = pybind11;
 using namespace {namespace};
 
 
-PYBIND11_MODULE({namespace}, m)
+PYBIND11_MODULE({module_base_name}, m)
 {{
 {newline.join(indent(pydantic, ' ' * 4) for pydantic in pydantic_defs)}
 }}
 """
 
-    with Path(output_dir, f"{cls_name}.h").open("w") as header_file:
+    with Path(output_dir, f"{module_base_name}.h").open("w") as header_file:
         header_file.write(header_contents)
 
-    with Path(output_dir, f"{cls_name}.cpp").open("w") as cpp_file:
+    with Path(output_dir, f"{module_base_name}.cpp").open("w") as cpp_file:
         cpp_file.write(cpp_contents)
 
 
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("-m", "--module", type=str, required=True)
-    parser.add_argument("-n", "--namespace", type=str, required=True)
     parser.add_argument("-o", "--output_dir", type=str, required=True)
     cl_args = parser.parse_args()
 
-    generate_module(cl_args.module, cl_args.namespace, cl_args.output_dir)
+    generate_module(cl_args.module, cl_args.output_dir)

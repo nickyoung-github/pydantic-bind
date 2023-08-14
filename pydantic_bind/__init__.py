@@ -1,4 +1,4 @@
-from base import BaseModelNoCopy
+from .base import BaseModelNoCopy
 
 __all__ = (
     BaseModelNoCopy,
