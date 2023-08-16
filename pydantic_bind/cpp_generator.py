@@ -1,6 +1,8 @@
 from argparse import ArgumentParser
 from collections.abc import Mapping, Sequence
+from dataclasses import MISSING, is_dataclass
 import datetime as dt
+from enum import Enum, EnumType
 from importlib import import_module
 from inspect import isclass
 from pathlib import Path
@@ -11,8 +13,7 @@ from textwrap import indent
 from types import UnionType
 from typing import Any, Optional, Set, Tuple, Union, get_origin, get_args
 
-from pydantic_bind.base import BaseModelNoCopy, ModelMetaclassNoCopy
-
+from pydantic_bind.base import BaseModelNoCopy
 
 __base_type_mappings = {
     bool: ("boolean", None),
@@ -33,7 +34,7 @@ NoneT = type(None)
 
 
 def cpp_default(value: Any) -> str | None:
-    if value is PydanticUndefined:
+    if value in (MISSING, PydanticUndefined):
         return None
     elif value is None:
         return "std::nullopt"
@@ -41,6 +42,8 @@ def cpp_default(value: Any) -> str | None:
         return "true" if value else "false"
     elif isinstance(value, str):
         return f'"{value}"'
+    elif isinstance(value, Enum):
+        return value.name
     elif isinstance(value, (int, float)):
         return str(value)
     elif isinstance(value, (list, set, tuple)):
@@ -92,7 +95,7 @@ def cpp_type(typ) -> Tuple[str, Set[str]]:
                     origin = typ
                 else:
                     raise RuntimeError(f"Cannot use non parameterised collection {typ} as a type")
-            elif issubclass(typ, BaseModel):
+            elif issubclass(typ, BaseModel) or is_dataclass(typ) or issubclass(typ, Enum):
                 return typ.__name__, {f'"{typ.__module__.replace(dot, slash)}.h"'}
             else:
                 raise RuntimeError(f"Can only use builtins, datetime or BaseModel-derived types, not {typ}")
@@ -104,10 +107,10 @@ def cpp_type(typ) -> Tuple[str, Set[str]]:
             return args_type("std::variant")
         elif origin in (list, Sequence):
             cpp_typ, includes = cpp_type(args[0])
-            return f"std::vector<{cpp_typ}>", includes.union(("optional",))
+            return f"std::vector<{cpp_typ}>", includes.union(("vector",))
         elif origin is set:
             cpp_typ, includes = cpp_type(args[0])
-            return f"std::set<{cpp_typ}>", includes.union(("optional",))
+            return f"std::set<{cpp_typ}>", includes.union(("set",))
         elif origin is tuple:
             if Ellipsis in args:
                 if len(args) != 2 or args[1] is not Ellipsis:
@@ -115,27 +118,38 @@ def cpp_type(typ) -> Tuple[str, Set[str]]:
 
                 # We've got something like Tuple[int, ...], treat it as a vector
                 cpp_typ, includes = cpp_type(args[0])
-                return f"std::vector<{cpp_typ}>", includes.union(("optional",))
+                return f"std::vector<{cpp_typ}>", includes.union(("vector",))
             else:
                 # An actual tuple
                 return args_type("std::tuple")
         elif origin in (dict, Mapping):
             key_type, key_includes = cpp_type(args[0])
             value_type, value_includes = cpp_type(args[0])
-            return f"std::unordered_map<{key_type}, {value_type}>", key_includes.union(value_includes)
+            return f"std::unordered_map<{key_type}, {value_type}>", \
+                key_includes.union(value_includes).union("unordered_map", )
         else:
             raise RuntimeError(f"Cannot handle type {typ}")
 
 
-def generate_class(model_class: ModelMetaclass):
+def generate_enum(enum_typ: EnumType):
+    items = (f"{i.name} = {i.value}" for i in enum_typ)
+    return f"""enum {enum_typ.__name__} {{ {', '.join(items)} }};"""
+
+
+def generate_class(model_class: ModelMetaclass) -> Tuple[Optional[str], Optional[str], Optional[Tuple[str, ...]]]:
     def field_info_iter():
-        if issubclass(model_class, BaseModelNoCopy):
+        if is_dataclass(model_class):
+            for field_name, field in model_class.__dataclass_fields__.items():
+                yield field_name, field.type, field.default
+        elif issubclass(model_class, BaseModelNoCopy):
             for field_name, field in model_class.__pydantic_decorators__.computed_fields.items():
                 yield field_name, field.info.return_type, field.info.default
         else:
             for field_name, field in model_class.model_fields.items():
                 yield field_name, field.annotation, field.default
 
+    frozen = model_class.__dataclass_params__.frozen if is_dataclass(model_class) else \
+        model_class.model_config.get("frozen")
     types = []
     kwargs = []
     constructor_args = []
@@ -143,7 +157,7 @@ def generate_class(model_class: ModelMetaclass):
     struct_members = []
     pydantic_attrs = []
     all_includes = set()
-    pydantic_def = ".def_readonly" if model_class.model_config.get("frozen") else ".def_readwrite"
+    pydantic_def = ".def_readonly" if frozen else ".def_readwrite"
     cls_name = model_class.__name__
     newline = "\n    "
 
@@ -162,6 +176,9 @@ def generate_class(model_class: ModelMetaclass):
         struct_members.insert(position, f"{typ} {name};")
         pydantic_attrs.insert(position, f'{pydantic_def}("{name}", &{cls_name}::{name})')
 
+    if not types:
+        return None, None, None
+
     # ToDo: wrap lines
 
     struct_def = f"""struct {cls_name}
@@ -170,7 +187,7 @@ def generate_class(model_class: ModelMetaclass):
         {', '.join(init_args)}
     {{
     }}
-    
+
     {newline.join(struct_members)}
 }};"""
 
@@ -182,8 +199,6 @@ def generate_class(model_class: ModelMetaclass):
 
 
 def generate_module(module_name: str, output_dir: str):
-    # ToDo: Handle enums
-
     newline = "\n\n"
     dot = r'.'
     slash = r'/'
@@ -201,16 +216,20 @@ def generate_module(module_name: str, output_dir: str):
     includes = set()
     struct_defs = []
     pydantic_defs = []
+    enum_defs = []
 
-    for model_class in (v for v in vars(module).values() if isclass(v) and issubclass(v, BaseModel)):
-        if model_class.__pydantic_decorators__.computed_fields or model_class.model_fields:
-            struct, pydantic, struct_includes = generate_class(model_class)
-            struct_defs.append(struct)
-            pydantic_defs.append(pydantic)
-            includes = includes.union(struct_includes)
+    for clz in (v for v in vars(module).values() if isclass(v)):
+        if clz is not Enum and issubclass(clz, Enum):
+            enum_defs.append(generate_enum(clz))
+        elif is_dataclass(clz) or issubclass(clz, BaseModel):
+            struct, pydantic, struct_includes = generate_class(clz)
+            if struct:
+                struct_defs.append(struct)
+                pydantic_defs.append(pydantic)
+                includes = includes.union(struct_includes)
 
-    if self_include in includes:
-        includes.remove(self_include)
+                if self_include in includes:
+                    includes.remove(self_include)
 
     header_contents = f"""
 #ifndef {guard}
@@ -221,7 +240,9 @@ def generate_module(module_name: str, output_dir: str):
 namespace {namespace}
 {{
 
-{newline.join(indent(struct, ' ' * 4) for struct in struct_defs)}
+{newline.join(indent(enum_def, ' ' * 4) for enum_def in enum_defs)}
+
+{newline.join(indent(struct_def, ' ' * 4) for struct_def in struct_defs)}
 
 }} // {namespace}
 
@@ -240,7 +261,7 @@ using namespace {namespace};
 
 PYBIND11_MODULE({module_base_name}, m)
 {{
-{newline.join(indent(pydantic, ' ' * 4) for pydantic in pydantic_defs)}
+{newline.join(indent(pydantic_def, ' ' * 4) for pydantic_def in pydantic_defs)}
 }}
 """
 
