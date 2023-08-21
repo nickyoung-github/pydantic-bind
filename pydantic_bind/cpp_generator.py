@@ -199,7 +199,8 @@ def generate_class(model_class: ModelMetaclass) -> Tuple[Optional[str], Optional
 
 
 def generate_module(module_name: str, output_dir: str):
-    newline = "\n\n"
+    single_newline = "\n"
+    double_newline = "\n\n"
     dot = r'.'
     slash = r'/'
 
@@ -235,14 +236,14 @@ def generate_module(module_name: str, output_dir: str):
 #ifndef {guard}
 #define {guard}
 
-{newline.join(includes)}
+{single_newline.join(includes)}
 
 namespace {namespace}
 {{
 
-{newline.join(indent(enum_def, ' ' * 4) for enum_def in enum_defs)}
+{double_newline.join(indent(enum_def, ' ' * 4) for enum_def in enum_defs)}
 
-{newline.join(indent(struct_def, ' ' * 4) for struct_def in struct_defs)}
+{double_newline.join(indent(struct_def, ' ' * 4) for struct_def in struct_defs)}
 
 }} // {namespace}
 
@@ -261,7 +262,7 @@ using namespace {namespace};
 
 PYBIND11_MODULE({module_base_name}, m)
 {{
-{newline.join(indent(pydantic_def, ' ' * 4) for pydantic_def in pydantic_defs)}
+{double_newline.join(indent(pydantic_def, ' ' * 4) for pydantic_def in pydantic_defs)}
 }}
 """
 
