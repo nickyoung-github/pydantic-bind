@@ -1,12 +1,12 @@
+from importlib import import_module
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, computed_field
 from pydantic.fields import ComputedFieldInfo, FieldInfo
 from pydantic.json_schema import GenerateJsonSchema
 from pydantic._internal._decorators import Decorator
 from pydantic._internal._internal_dataclass import slots_dataclass
 from pydantic._internal._model_construction import ModelMetaclass as PydanticModelMetaclass, PydanticGenericMetadata
-
 from pydantic_core import PydanticUndefined
-
+import sys
 from typing import Any, Dict, List, Type, cast
 
 
@@ -57,6 +57,18 @@ def _setter(name: str, typ: Type):
     return fn
 
 
+def _get_pydantic_bind_class(module_name: str, cls_name: str):
+    module_parts = module_name.split(".")
+    module_parts.insert(-2, ".pydantic_bind")
+    pydantic_bind_module = ".".join(module_parts)
+
+    module = sys.modules.get(pydantic_bind_module)
+    if not module:
+        module = import_module(pydantic_bind_module)
+
+    return getattr(module, cls_name)
+
+
 class ModelMetaclass(PydanticModelMetaclass):
     def __new__(
         mcs,
@@ -67,9 +79,11 @@ class ModelMetaclass(PydanticModelMetaclass):
         __pydantic_reset_parent_namespace__: bool = True,
         **kwargs: Any,
     ) -> type:
-        if cls_name != "Base":
-            annotations = namespace.get("__annotations__", {})
+        annotations = namespace.get("__annotations__", {})
+
+        if annotations:
             properties = {}
+            namespace["__impl_class__"] = _get_pydantic_bind_class(mcs.__module__, cls_name)
 
             for name, typ in annotations.items():
                 value = namespace.get(name, PydanticUndefined)
@@ -87,12 +101,9 @@ class ModelMetaclass(PydanticModelMetaclass):
                 annotations.pop(name)
                 namespace[name] = prop
 
-            # import common_object_model as cm
-            # namespace["__impl_class__"] = getattr(cm, cls_name, None)
-
             # ToDo: add signature
 
-        ret = super().__new__(mcs, cls_name, bases, namespace, **kwargs)
+        ret = cast(ModelMetaclass, super().__new__(mcs, cls_name, bases, namespace, **kwargs))
         ret.__pydantic_decorators__.__annotations__["computed_fields"] = dict[str, Decorator[PropertyFieldInfo]]
 
         return ret
