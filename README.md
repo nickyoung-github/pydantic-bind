@@ -2,9 +2,11 @@
 
 # Table of Contents
 1. [Overview](#Overview)
-2. [No Copy](#No-copy)
-3. [Msgpack](#Msgpack)
-4. [Generated Code](#Generated-Code)
+2. [No Copy](#No-Copy)
+3. [Supported Types](#Supported-Types)
+4. [Inheritance](#Inheritance)
+5. [Msgpack](#Msgpack)
+6. [Generated Code](#Generated-Code)
 
 
 ## Overview
@@ -71,6 +73,28 @@ being re-written using `computed_field`, with property getters and setters opera
 `BaseModelNoCopy.__init__` will create the corresponding pybind class, using the supplied values.
 
 
+## Supported types
+
+The following Python -> C++ mappings are supported (there are likely others I should consider):
+
+- bool --> bool
+- float --> double
+- int --> int
+- str --> std::string
+- datetime.date --> std::chrono::system_clock::time_point
+- datetime.datetime --> std::chrono::system_clock::time_point
+- datetime.time --> std::chrono::system_clock::time_point
+- datetime.timedelta --> std::chrono::duration
+- pydantic.BaseModel --> struct
+- pydantic_bind.BaseModelNoCopy --> struct
+- dataclass --> struct
+
+## Inheritance
+
+I have tested single inheritance (see [Generated Code](#Generated-code)). Multiple inheritance may work ... or it
+may not. I'd generally advise against using it for data classes
+
+
 ## Msgpack
 
 A rather rudimentary msgpack implementation is added to the generated C++ structs, using a slightly modified version
@@ -87,7 +111,7 @@ project with my rather rudimentary cmake skillz!) Changes include:
 
 Code is generated into a directory structure underneath `<top level>/generated/`
 
-Headers are installed to `<top level\>/include`
+Headers are installed to `<top level>/include`
 
 Compiled pybind modules are installed into `<original module path>/__pybind__/`
 
