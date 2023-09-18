@@ -262,7 +262,7 @@ def generate_enum(enum_typ: EnumType, indent_size: int = 0, max_width: int = 110
 
     pydantic_items = (f'.value("{i.name}", {name}::{i.name})' for i in enum_typ)
     pydantic_def = f'{indent}py::enum_<{name}>(m, "{name}")'
-    pydantic_def += newline_indent.join(pydantic_items) + ";"
+    pydantic_def += newline_indent + newline_indent.join(pydantic_items) + ";"
 
     return enum_def, pydantic_def
 
@@ -288,7 +288,7 @@ def generate_module(module_name: str, output_dir: str, indent_size: int = 4, max
     pydantic_defs = []
     enum_defs = []
 
-    for clz in (v for v in vars(module).values() if isclass(v)):
+    for clz in (v for v in vars(module).values() if isclass(v) and v.__module__ == module.__name__):
         if clz is not Enum and issubclass(clz, Enum):
             enum_def, pydantic_def = generate_enum(clz, indent_size, max_width)
             enum_defs.append(enum_def)
@@ -303,17 +303,16 @@ def generate_module(module_name: str, output_dir: str, indent_size: int = 4, max
                 if self_include in includes:
                     includes.remove(self_include)
 
+    enum_contents = f"\n{double_newline.join(enum_defs)}{single_newline if struct_defs else ''}" if enum_defs else ""
+    struct_contents = f"\n{double_newline.join(struct_defs)}" if struct_defs else ""
+    include_contents = f"\n{single_newline.join(includes)}\n" if includes else ""
+
     header_contents = f"""
 #ifndef {guard}
 #define {guard}
-
-{single_newline.join(includes)}
-
+{include_contents}
 namespace {namespace}
-{{
-{double_newline.join(enum_defs)}
-
-{double_newline.join(struct_defs)}
+{{{enum_contents}{struct_contents}
 }} // {namespace}
 
 #endif // {guard}
