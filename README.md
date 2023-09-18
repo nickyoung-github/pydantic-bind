@@ -64,7 +64,7 @@ You can create an instance of the pybind class from your original using `get_pyb
     generated = get_pybind_value(orig)
 
 
-## No copy
+## No Copy
 
 What if you would like a single representation of the data, shared between C++ and Python. Then fear not,
 `base.BaseModelNoCopy` is your friend! Deriving from this class will result in the annotations for the pydantic class
@@ -73,7 +73,7 @@ being re-written using `computed_field`, with property getters and setters opera
 `BaseModelNoCopy.__init__` will create the corresponding pybind class, using the supplied values.
 
 
-## Supported types
+## Supported Types
 
 The following Python -> C++ mappings are supported (there are likely others I should consider):
 
@@ -107,7 +107,7 @@ project with my rather rudimentary cmake skillz!) Changes include:
 - Support for std::variant
 
 
-## Generated code
+## Generated Code
 
 Code is generated into a directory structure underneath `<top level>/generated/`
 
