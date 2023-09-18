@@ -1,1 +1,2 @@
 include pydantic_bind/share/cmake/pydantic-bind/*
+include pydantic_bind/include/*
