@@ -1,7 +1,7 @@
 from setuptools import find_packages, setup
 
 setup(name="pydantic_bind",
-      version="1.0.6",
+      version="1.0.7",
       description="C++/pybind generation from Pydantic classes",
       author="Nick Young",
       license=r"https://www.apache.org/licenses/LICENSE-2.0",
