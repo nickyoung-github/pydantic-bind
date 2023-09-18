@@ -12,23 +12,23 @@
 ## Overview
 
 This project has helpers for automatically generating C++ structs and corresponding pybind marshalling code for 
-dataclasses and Pydantic-based classes.
+dataclasses and pydantc-based classes.
 
 This is achieved via a cmake rule: `pydantic_bind_add_module(<path to module>)`
 
 Add a module this way and it will be scanned for:
 - dataclasses
-- classes derived from Pydantic's BaseModel
+- classes derived from pydantc's BaseModel
 - enums
 
 For any of these which are encountered, a definition will be added to a .h file, with relative path matching the module
 and [pybind11](https://pybind11.readthedocs.io/en/stable/index.html) code for binding objects added to a
 corresponding .cpp file.
 
-The intended use of this package is for defining behaviour-less data classes, to be shared between Python and C++. E.g.,
+The intended use of this package is for defining behaviour-less data classes, to be shared between python and C++. E.g.,
 a common object model for financial modelling.
 
-Note that the typcal Python developer experience is now somewhat changed, in that it's necessary to build/install
+Note that the typcal python developer experience is now somewhat changed, in that it's necessary to build/install
 the project. I personally use JetBrains CLion, in place of PyCharm for such projects.
 
 You can create an instance of the pybind class from your original using `get_pybind_instance()`, e.g.,
@@ -49,8 +49,8 @@ You can create an instance of the pybind class from your original using `get_pyb
     
     set(CMAKE_CXX_STANDARD 20)
     
-    find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
-    find_package(pydantic_bind REQUIRED COMPONENTS HINTS "${Python3_SITELIB}")
+    find_package(python3 REQUIRED COMPONENTS Interpreter Development)
+    find_package(pydantic_bind REQUIRED COMPONENTS HINTS "${python3_SITELIB}")
     
     pydantic_bind_add_module(my_class.py)
 
@@ -66,7 +66,7 @@ You can create an instance of the pybind class from your original using `get_pyb
 
 ## No Copy
 
-What if you would like a single representation of the data, shared between C++ and Python. Then fear not,
+What if you would like a single representation of the data, shared between C++ and python. Then fear not,
 `base.BaseModelNoCopy` is your friend! Deriving from this class will result in the annotations for the pydantic class
 being re-written using `computed_field`, with property getters and setters operating on the generated pybind class.
 
@@ -75,7 +75,7 @@ being re-written using `computed_field`, with property getters and setters opera
 
 ## Supported Types
 
-The following Python -> C++ mappings are supported (there are likely others I should consider):
+The following python -> C++ mappings are supported (there are likely others I should consider):
 
 - bool --> bool
 - float --> double
