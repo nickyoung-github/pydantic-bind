@@ -4,7 +4,7 @@ from pydantic.fields import ComputedFieldInfo, FieldInfo
 from pydantic.json_schema import GenerateJsonSchema
 from pydantic._internal._decorators import Decorator
 from pydantic._internal._internal_dataclass import slots_dataclass
-from pydantic._internal._model_construction import ModelMetaclass as PydanticModelMetaclass, PydanticGenericMetadata
+from pydantic._internal._model_construction import ModelMetaclass, PydanticGenericMetadata
 from pydantic_core import PydanticUndefined
 import sys
 from typing import Any, Dict, List, Type, cast
@@ -57,7 +57,7 @@ def _setter(name: str, typ: Type):
     return fn
 
 
-class ModelMetaclass(PydanticModelMetaclass):
+class ModelMetaclassNoCopy(ModelMetaclass):
     def __new__(
         mcs,
         cls_name: str,
@@ -70,8 +70,10 @@ class ModelMetaclass(PydanticModelMetaclass):
         annotations = namespace.get("__annotations__", {})
 
         if annotations:
+            # Rewrite annotations as properties, with getters and setters which interact with the attributes
+            # on the generated pybind_impl class
+
             properties = {}
-            # namespace["__impl_class__"] = _get_pydantic_bind_class(mcs.__module__, cls_name)
 
             for name, typ in annotations.items():
                 value = namespace.get(name, PydanticUndefined)
@@ -97,7 +99,7 @@ class ModelMetaclass(PydanticModelMetaclass):
         return ret
 
 
-def json_schema_extra(schema: Dict[str, Any], model_class: ModelMetaclass) -> None:
+def json_schema_extra(schema: Dict[str, Any], model_class: ModelMetaclassNoCopy) -> None:
     generator = GenerateJsonSchema(by_alias=True)
     definitions: List[Dict] = model_class.__pydantic_core_schema__["definitions"]
     definition = next(d for d in definitions if d["cls"] == model_class)
@@ -121,7 +123,14 @@ def json_schema_extra(schema: Dict[str, Any], model_class: ModelMetaclass) -> No
         properties[alias] = field_schema
 
 
-def get_pybind_type(typ: ModelMetaclass):
+def get_pybind_type(typ: ModelMetaclass) -> type:
+    """
+    Return the generated pybind type corresponding to the BaseNodel-derived type
+
+    :param typ: A Pydantic BaseModel-derived type
+    :return: The corresponding, generated pybind type
+    """
+
     module_parts = typ.__module__.split(".")
     module_parts.insert(-1, "__pybind__")
     pybind_module = ".".join(module_parts)
@@ -131,6 +140,19 @@ def get_pybind_type(typ: ModelMetaclass):
         module = import_module(pybind_module)
 
     return getattr(module, typ.__name__)
+
+
+class BaseModel(PydanticBaseModel):
+
+    def model_post_init(self, __context: Any):
+        self.__pybind_impl = get_pybind_type(
+            type(self))(**{name: getattr(self, name) for name in self.model_fields.keys()})\
+            if self.model_config.get("frozen") else None
+
+    @property
+    def pybind_impl(self):
+        return self.__pybind_impl or\
+            get_pybind_type(type(self))(**{name: getattr(self, name) for name in self.model_fields.keys()})
 
 
 class BaseModelNoCopy(PydanticBaseModel, metaclass=ModelMetaclass):
