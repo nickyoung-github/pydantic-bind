@@ -193,9 +193,9 @@ def generate_class(model_class: ModelMetaclass) -> Tuple[Optional[str], Optional
     {newline.join(struct_members)}
     
     template<class T>
-    void msgpack(T &pack)
+    void pack(T &packer)
     {{
-        pack({', '.join(names)});
+        packer({', '.join(names)});
     }}
 }};"""
 
