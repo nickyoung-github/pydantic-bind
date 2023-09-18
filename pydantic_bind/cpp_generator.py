@@ -156,12 +156,14 @@ def generate_class(model_class: ModelMetaclass) -> Tuple[Optional[str], Optional
     init_args = []
     struct_members = []
     pydantic_attrs = []
-    all_includes = set()
+    names = []
+    all_includes = {"#include <msgpack/msgpack.h>"}
     pydantic_def = ".def_readonly" if frozen else ".def_readwrite"
     cls_name = model_class.__name__
     newline = "\n    "
 
     for name, field_type, default in field_info_iter():
+        names.append(name)
         typ, includes = cpp_type(field_type)
         all_includes.update(includes)
         default = cpp_default(default)
@@ -189,6 +191,12 @@ def generate_class(model_class: ModelMetaclass) -> Tuple[Optional[str], Optional
     }}
 
     {newline.join(struct_members)}
+    
+    template<class T>
+    void msgpack(T &pack)
+    {{
+        pack({', '.join(names)});
+    }}
 }};"""
 
     pydantic_def = f"""py::class_<{cls_name}>(m, "{cls_name}")
