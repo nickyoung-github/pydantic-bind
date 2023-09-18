@@ -92,7 +92,7 @@ def cpp_type(typ) -> Tuple[str, Set[str]]:
                     origin = typ
                 else:
                     raise RuntimeError(f"Cannot use non parameterised collection {typ} as a type")
-            elif issubclass(typ, BaseModelNoCopy):
+            elif issubclass(typ, BaseModel):
                 return typ.__name__, {f'"{typ.__module__.replace(dot, slash)}.h"'}
             else:
                 raise RuntimeError(f"Can only use builtins, datetime or BaseModel-derived types, not {typ}")
@@ -129,12 +129,12 @@ def cpp_type(typ) -> Tuple[str, Set[str]]:
 
 def generate_class(model_class: ModelMetaclass):
     def field_info_iter():
-        if issubclass(model_class, ModelMetaclassNoCopy):
-            for field_name, field in model_class._pydantic_decorators__.computed_fields.items():
-                yield field_name, field.return_type, field.default
+        if issubclass(model_class, BaseModelNoCopy):
+            for field_name, field in model_class.__pydantic_decorators__.computed_fields.items():
+                yield field_name, field.info.return_type, field.info.default
         else:
             for field_name, field in model_class.model_fields.items():
-                yield field_name, field.type, field.default
+                yield field_name, field.annotation, field.default
 
     types = []
     kwargs = []
@@ -143,7 +143,7 @@ def generate_class(model_class: ModelMetaclass):
     struct_members = []
     pydantic_attrs = []
     all_includes = set()
-    pydantic_def = ".def_read" if model_class.model_config.get("frozen") else ".def_readwrite"
+    pydantic_def = ".def_readonly" if model_class.model_config.get("frozen") else ".def_readwrite"
     cls_name = model_class.__name__
     newline = "\n    "
 
@@ -203,7 +203,7 @@ def generate_module(module_name: str, output_dir: str):
     pydantic_defs = []
 
     for model_class in (v for v in vars(module).values() if isclass(v) and issubclass(v, BaseModel)):
-        if model_class.__pydantic_decorators__.computed_fields:
+        if model_class.__pydantic_decorators__.computed_fields or model_class.model_fields:
             struct, pydantic, struct_includes = generate_class(model_class)
             struct_defs.append(struct)
             pydantic_defs.append(pydantic)
