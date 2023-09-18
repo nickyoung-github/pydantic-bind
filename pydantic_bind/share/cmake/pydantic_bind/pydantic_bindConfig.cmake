@@ -1,11 +1,9 @@
 
-set(pydantic_bind_INCLUDE_DIR "@pydantic_bind_INCLUDEDIR@")
-
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
 find_package(pybind11 REQUIRED)
 
 include_directories("${Python3_SITELIB}/pydantic_bind/include")
-
+include_directories("${PROJECT_SOURCE_DIR}/generated")
 
 function(pydantic_bind_add_module)
     cmake_path(GET ARGN FILENAME target_name)
@@ -13,6 +11,7 @@ function(pydantic_bind_add_module)
 
     cmake_path(REPLACE_EXTENSION ARGN cpp OUTPUT_VARIABLE target_cpp)
     cmake_path(REPLACE_EXTENSION target_cpp h OUTPUT_VARIABLE target_header)
+    cmake_path(REMOVE_FILENAME target_header OUTPUT_VARIABLE header_root)
 
     cmake_path(REMOVE_EXTENSION target_cpp OUTPUT_VARIABLE module)
     string(REPLACE "/" "." module ${module})
@@ -31,10 +30,9 @@ function(pydantic_bind_add_module)
     )
 
     pybind11_add_module(${target_name} "${target_cpp}" "${target_header}")
-    set_target_properties(${target_name} PROPERTIES PUBLIC_HEADER "${target_header}")
 
-    install(TARGETS ${target_name}
-            DESTINATION ${pybind_dir}
-            PUBLIC_HEADER DESTINATION "${PROJECT_SOURCE_DIR}/include")
+    target_include_directories(${target_name} INTERFACE "${Python3_SITELIB}/pydantic_bind/include")
+
+    install(FILES "${target_header}" DESTINATION "${PROJECT_SOURCE_DIR}/include/${header_root}")
+    install(TARGETS ${target_name} DESTINATION ${pybind_dir})
 endfunction()
-
