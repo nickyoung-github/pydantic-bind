@@ -1,3 +1,5 @@
+from enum import Enum, EnumType
+from functools import cache
 from importlib import import_module
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, computed_field
 from pydantic.fields import ComputedFieldInfo, FieldInfo
@@ -7,10 +9,11 @@ from pydantic._internal._internal_dataclass import slots_dataclass
 from pydantic._internal._model_construction import ModelMetaclass, PydanticGenericMetadata
 from pydantic_core import PydanticUndefined
 import sys
-from typing import Any, Dict, List, Type, cast
+from typing import Any, Dict, List, Type, Union, cast
 
 
-def get_pybind_type(typ: ModelMetaclass) -> type:
+@cache
+def get_pybind_type(typ: Union[Enum, ModelMetaclass]) -> Union[EnumType, Type]:
     """
     Return the generated pybind type corresponding to the BaseNodel-derived type
 
@@ -56,9 +59,13 @@ def to_title(snake_str: str) -> str:
     return " ".join(word.title() for word in snake_str.split("_"))
 
 
-def _getter(name: str, typ: Type):
+def _getter(name: str, typ: Union[EnumType, Type]):
     def fn(self):
-        return getattr(self.pybind_impl, name)
+        ret = getattr(self.pybind_impl, name)
+        if issubclass(typ, Enum):
+            ret = typ[ret.name]
+
+        return ret
 
     fn.__name__ = name
     fn.__annotations__ = {"return": typ}
@@ -66,8 +73,11 @@ def _getter(name: str, typ: Type):
     return fn
 
 
-def _setter(name: str, typ: Type):
+def _setter(name: str, typ: Union[EnumType, Type]):
     def fn(self, value: Any):
+        if issubclass(typ, Enum):
+            value = get_pybind_type(typ)[value.name]
+
         setattr(self.pybind_impl, name, value)
 
     fn.__name__ = name
@@ -174,6 +184,8 @@ class BaseModelNoCopy(PydanticBaseModel, metaclass=ModelMetaclassNoCopy):
             if value == PydanticUndefined:
                 if field_info.alias:
                     value = kwargs.get(field_info.alias, PydanticUndefined)
+                    if issubclass(field_info.return_type, Enum):
+                        value = get_pybind_type(field_info.return_type)[value.name]
 
                 if value == PydanticUndefined:
                     if field_info.required:
@@ -181,6 +193,9 @@ class BaseModelNoCopy(PydanticBaseModel, metaclass=ModelMetaclassNoCopy):
                 else:
                     kwargs.pop(name)
                     kwargs[field_info.alias] = value
+
+            elif issubclass(field_info.return_type, Enum):
+                kwargs[name] = get_pybind_type(field_info.return_type)[value.name]
 
         if missing_required:
             raise RuntimeError(f"Missing required fields: {missing_required}")

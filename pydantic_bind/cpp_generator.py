@@ -167,7 +167,12 @@ def class_attrs(model_class: ModelMetaclass):
     for name, field_type, default in field_info_iter(model_class):
         typ, includes = cpp_type(field_type)
         all_includes.update(includes)
-        move = field_type not in __no_move_types
+
+        try:
+            move = field_type not in __no_move_types and not issubclass(field_type, Enum)
+        except TypeError as e:
+            move = False
+
         default = cpp_default(default)
         position = len(types) if default else 0  # Need to ensure non-defaulted params are first
         names.insert(position, name)
@@ -189,14 +194,14 @@ def class_attrs(model_class: ModelMetaclass):
             pydantic_attrs.insert(position, f'{pydantic_def}("{name}", &{model_class.__name__}::{name})')
 
     base_init = {b: class_attrs(b)[0] for b in bases}
-    return names, constructor_args, init_args, default_init_args if needs_default_constructor else [], base_init,\
+    return names, constructor_args, init_args, default_init_args if needs_default_constructor else [], base_init, \
         types, kwargs, struct_members, pydantic_attrs, all_includes
 
 
-def generate_class(model_class: ModelMetaclass, indent_size: int = 0) ->\
-    Tuple[Optional[str], Optional[str], Optional[Tuple[str, ...]]]:
+def generate_class(model_class: ModelMetaclass, indent_size: int = 0, max_width: int = 110) -> \
+        Tuple[Optional[str], Optional[str], Optional[Tuple[str, ...]]]:
 
-    names, constructor_args, init_args, default_init_args, base_init, types, kwargs, struct_members, pydantic_attrs,\
+    names, constructor_args, init_args, default_init_args, base_init, types, kwargs, struct_members, pydantic_attrs, \
         all_includes = class_attrs(model_class)
 
     if not types:
@@ -207,19 +212,20 @@ def generate_class(model_class: ModelMetaclass, indent_size: int = 0) ->\
     default_constructor = ""
     indent = " " * indent_size
     newline = "\n"
+    newline_indent = f"{newline}    {indent}"
     init_indent = " " * (indent_size + 8)
     init_wrapper = TextWrapper(break_long_words=False, initial_indent=init_indent, subsequent_indent=init_indent,
-                               width=110)
+                               width=max_width)
     args_indent = " " * (indent_size + 5 + len(cls_name))
-    args_wrapper = TextWrapper(break_long_words=False, subsequent_indent=args_indent, width=110)
+    args_wrapper = TextWrapper(break_long_words=False, subsequent_indent=args_indent, width=max_width)
 
     if default_init_args:
         default_constructor = f"{indent}{cls_name}() :\n"
 
         if base_init:
-            default_constructor +=\
-                f"{indent}        " +\
-                f"{(',        ' + newline + indent).join(base.__name__ + '()' for base in base_init.keys())}" +\
+            default_constructor += \
+                f"{indent}        " + \
+                f"{(',        ' + newline + indent).join(base.__name__ + '()' for base in base_init.keys())}" + \
                 "," + newline
 
         default_constructor += "\n".join(init_wrapper.wrap(', '.join(default_init_args)))
@@ -231,7 +237,7 @@ def generate_class(model_class: ModelMetaclass, indent_size: int = 0) ->\
 
     base_init_str = ""
     if base_init:
-        base_init_str = f"        {indent}" +\
+        base_init_str = f"        {indent}" + \
                         f"""{(',' + newline + indent).join(base.__name__ + '(' + ', '.join(args) + ')'
                                                            for base, args in base_init.items())},{newline}"""
 
@@ -242,25 +248,37 @@ def generate_class(model_class: ModelMetaclass, indent_size: int = 0) ->\
     {indent}{{
     {indent}}}
 
-    {indent}{(newline + '    ' + indent).join(struct_members)}
+    {indent}{newline_indent.join(struct_members)}
     
     {indent}MSGPACK_DEFINE({', '.join(names)});
 {indent}}};"""
 
+    pydantic_init = "\n".join(args_wrapper.wrap(f"{', '.join(types)}>(), {', '.join(kwargs)}"))
     pydantic_def = f"""{indent}py::class_<{cls_name}>(m, "{cls_name}")
-    {indent}.def(py::init<{', '.join(types)}>(), {', '.join(kwargs)})
-    {indent}{(newline + indent).join(pydantic_attrs)};"""
+    {indent}.def(py::init<{pydantic_init})
+    {indent}{newline_indent.join(pydantic_attrs)};"""
 
     return struct_def, pydantic_def, tuple(f"#include {i}" for i in sorted(all_includes))
 
 
-def generate_enum(enum_typ: EnumType, indent_size: int = 0):
-    items = (f"{i.name} = {i.value}" for i in enum_typ)
+def generate_enum(enum_typ: EnumType, indent_size: int = 0, max_width: int = 110) -> Tuple[str, str]:
+    name = enum_typ.__name__
     indent = " " * indent_size
-    return f"""{indent}enum {enum_typ.__name__} {{ {', '.join(items)} }};"""
+    args_indent = indent * 2
+    newline_indent = f"\n{args_indent}"
+    args_wrapper = TextWrapper(break_long_words=False, subsequent_indent=args_indent, width=max_width)
+
+    items = (f"{i.name} = {i.value}" for i in enum_typ)
+    enum_def = "\n".join(args_wrapper.wrap(f"""{indent}enum {name} {{ {', '.join(items)} }};"""))
+
+    pydantic_items = (f'.value("{i.name}", {name}::{i.name})' for i in enum_typ)
+    pydantic_def = f'{indent}py::enum_<{name}>(m, "{name}")'
+    pydantic_def += newline_indent.join(pydantic_items) + ";"
+
+    return enum_def, pydantic_def
 
 
-def generate_module(module_name: str, output_dir: str):
+def generate_module(module_name: str, output_dir: str, indent_size: int = 4, max_width: int = 110):
     single_newline = "\n"
     double_newline = "\n\n"
     dot = r'.'
@@ -283,12 +301,14 @@ def generate_module(module_name: str, output_dir: str):
 
     for clz in (v for v in vars(module).values() if isclass(v)):
         if clz is not Enum and issubclass(clz, Enum):
-            enum_defs.append(generate_enum(clz))
+            enum_def, pydantic_def = generate_enum(clz, indent_size, max_width)
+            enum_defs.append(enum_def)
+            pydantic_defs.append(pydantic_def)
         elif is_dataclass(clz) or issubclass(clz, PydanticBaseModel):
-            struct, pydantic, struct_includes = generate_class(clz, 4)
-            if struct:
-                struct_defs.append(struct)
-                pydantic_defs.append(pydantic)
+            struct_def, pydantic_def, struct_includes = generate_class(clz, indent_size, max_width=max_width)
+            if struct_def:
+                struct_defs.append(struct_def)
+                pydantic_defs.append(pydantic_def)
                 includes = includes.union(struct_includes)
 
                 if self_include in includes:
@@ -302,11 +322,9 @@ def generate_module(module_name: str, output_dir: str):
 
 namespace {namespace}
 {{
-
 {double_newline.join(enum_defs)}
 
 {double_newline.join(struct_defs)}
-
 }} // {namespace}
 
 #endif // {guard}
@@ -315,6 +333,7 @@ namespace {namespace}
     cpp_contents = f"""
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/chrono.h>
 
 #include "{module_base_name}.h"
 
