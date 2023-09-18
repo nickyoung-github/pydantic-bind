@@ -14,6 +14,16 @@
 #include <chrono>
 #include <cmath>
 #include <bitset>
+#include <system_error>
+
+
+#define MSGPACK_DEFINE(args...) \
+    template<class T> \
+    void pack(T &packer) \
+    { \
+        packer(args); \
+    }
+
 
 namespace msgpack {
     enum class UnpackerError {

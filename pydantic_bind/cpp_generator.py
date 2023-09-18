@@ -16,7 +16,7 @@ from typing import Any, Optional, Set, Tuple, Union, get_origin, get_args
 from pydantic_bind.base import BaseModelNoCopy
 
 __base_type_mappings = {
-    bool: ("boolean", None),
+    bool: ("bool", None),
     float: ("double", None),
     int: ("int", None),
     str: ("std::string", "<string>"),
@@ -192,11 +192,7 @@ def generate_class(model_class: ModelMetaclass) -> Tuple[Optional[str], Optional
 
     {newline.join(struct_members)}
     
-    template<class T>
-    void pack(T &packer)
-    {{
-        packer({', '.join(names)});
-    }}
+    MSGPACK_DEFINE({', '.join(names)});
 }};"""
 
     pydantic_def = f"""py::class_<{cls_name}>(m, "{cls_name}")
