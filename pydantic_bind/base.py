@@ -39,7 +39,7 @@ def to_title(snake_str: str) -> str:
 
 def _getter(name: str, typ: Type):
     def fn(self):
-        return getattr(self._impl, name)
+        return getattr(self.pybind_impl, name)
 
     fn.__name__ = name
     fn.__annotations__ = {"return": typ}
@@ -49,24 +49,12 @@ def _getter(name: str, typ: Type):
 
 def _setter(name: str, typ: Type):
     def fn(self, value: Any):
-        setattr(self._impl, name, value)
+        setattr(self.pybind_impl, name, value)
 
     fn.__name__ = name
     fn.__annotations__ = {"value": typ}
 
     return fn
-
-
-def _get_pydantic_bind_class(module_name: str, cls_name: str):
-    module_parts = module_name.split(".")
-    module_parts.insert(-2, ".pydantic_bind")
-    pydantic_bind_module = ".".join(module_parts)
-
-    module = sys.modules.get(pydantic_bind_module)
-    if not module:
-        module = import_module(pydantic_bind_module)
-
-    return getattr(module, cls_name)
 
 
 class ModelMetaclass(PydanticModelMetaclass):
@@ -83,7 +71,7 @@ class ModelMetaclass(PydanticModelMetaclass):
 
         if annotations:
             properties = {}
-            namespace["__impl_class__"] = _get_pydantic_bind_class(mcs.__module__, cls_name)
+            # namespace["__impl_class__"] = _get_pydantic_bind_class(mcs.__module__, cls_name)
 
             for name, typ in annotations.items():
                 value = namespace.get(name, PydanticUndefined)
@@ -133,12 +121,28 @@ def json_schema_extra(schema: Dict[str, Any], model_class: ModelMetaclass) -> No
         properties[alias] = field_schema
 
 
+def get_pybind_type(typ: ModelMetaclass):
+    module_parts = typ.__module__.split(".")
+    module_parts.insert(-1, "__pybind__")
+    pybind_module = ".".join(module_parts)
+
+    module = sys.modules.get(pybind_module)
+    if not module:
+        module = import_module(pybind_module)
+
+    return getattr(module, typ.__name__)
+
+
 class BaseModelNoCopy(PydanticBaseModel, metaclass=ModelMetaclass):
     model_config = ConfigDict(json_schema_extra=json_schema_extra)
 
     @property
     def model_computed_fields(self) -> dict[str, PropertyFieldInfo]:
-        return cast(dict[str, PropertyFieldInfo], super().model_computed_fields.items())
+        return cast(dict[str, PropertyFieldInfo], super().model_computed_fields)
+
+    @property
+    def pybind_impl(self):
+        return self.__pybind_impl
 
     def __init__(self, **kwargs):
         missing_required = []
@@ -160,4 +164,6 @@ class BaseModelNoCopy(PydanticBaseModel, metaclass=ModelMetaclass):
             raise RuntimeError(f"Missing required fields: {missing_required}")
 
         super().__init__()
-        self._impl = self.__impl_class__(**kwargs)
+
+        pybind_type = get_pybind_type(type(self))
+        self.__pybind_impl = pybind_type(**kwargs)
