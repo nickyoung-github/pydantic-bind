@@ -1,11 +1,12 @@
 from setuptools import setup
 
 setup(name="pydantic_bind",
-      version="1.0.3",
+      version="1.0.4",
       description="C++/pybind generation from Pydantic classes",
       author="Nick Young",
       license=r"https://www.apache.org/licenses/LICENSE-2.0",
       packages=["pydantic_bind", "share"],
+      include_package_data=True,
       install_requires=[
           "pydantic>=2.0.2",
           "pybind11"
