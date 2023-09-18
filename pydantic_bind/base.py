@@ -1,7 +1,8 @@
+from dataclasses import is_dataclass
 from enum import Enum, EnumType
 from functools import cache
 from importlib import import_module
-from pydantic import BaseModel as PydanticBaseModel, ConfigDict, computed_field
+from pydantic import BaseModel as BaseModel, ConfigDict, computed_field
 from pydantic.fields import ComputedFieldInfo, FieldInfo
 from pydantic.json_schema import GenerateJsonSchema
 from pydantic._internal._decorators import Decorator
@@ -9,7 +10,28 @@ from pydantic._internal._internal_dataclass import slots_dataclass
 from pydantic._internal._model_construction import ModelMetaclass, PydanticGenericMetadata
 from pydantic_core import PydanticUndefined
 import sys
-from typing import Any, Dict, List, Type, Union, cast
+from types import UnionType
+from typing import Any, Dict, List, Type, Optional, Union, cast, get_args, get_origin
+
+
+class UnconvertableValue(Exception):
+    pass
+
+
+class __IBaseModelNoCopy:
+    pass
+
+
+def field_info_iter(model_class: ModelMetaclass):
+    if is_dataclass(model_class):
+        for field_name, field in model_class.__dataclass_fields__.items():
+            yield field_name, field.type, field.default
+    elif issubclass(model_class, BaseModelNoCopy):
+        for field_name, field in model_class.__pydantic_decorators__.computed_fields.items():
+            yield field_name, field.info.return_type, field.info.default
+    else:
+        for field_name, field in model_class.model_fields.items():
+            yield field_name, field.annotation, field.default
 
 
 @cache
@@ -17,7 +39,7 @@ def get_pybind_type(typ: Union[Enum, ModelMetaclass]) -> Union[EnumType, Type]:
     """
     Return the generated pybind type corresponding to the BaseNodel-derived type
 
-    :param typ: A Pydantic BaseModel-derived type
+    :param typ: A dataclass or Pydantic BaseModel-derived type
     :return: The corresponding, generated pybind type
     """
 
@@ -30,6 +52,57 @@ def get_pybind_type(typ: Union[Enum, ModelMetaclass]) -> Union[EnumType, Type]:
         module = import_module(pybind_module)
 
     return getattr(module, typ.__name__)
+
+
+def get_pybind_value(obj):
+    """
+    Return the generated pybind type corresponding to the BaseNodel-derived type
+
+    :param obj: A dataclass or Pydantic BaseModel-derived object
+    :return: The corresponding pybind object
+    """
+    return _get_pybind_value(obj, False)
+
+
+def _get_pybind_value(obj, default_to_self: bool = True):
+    if isinstance(obj, Enum):
+        return get_pybind_type(type(obj)).__entries[obj.name][0]
+    elif is_dataclass(obj):
+        return get_pybind_type(type(obj))(**{name: _get_pybind_value(getattr(obj, name))
+                                             for name in obj.__dataclass_fields__.keys()})
+    elif isinstance(obj, __IBaseModelNoCopy):
+        return get_pybind_type(type(obj))(**{name: _get_pybind_value(getattr(obj, name))
+                                             for name in obj.model_computed_fields.keys()})
+    elif isinstance(obj, BaseModel):
+        return get_pybind_type(type(obj))(**{name: _get_pybind_value(getattr(obj, name))
+                                             for name in obj.model_fields.keys()})
+    elif default_to_self:
+        return obj
+    else:
+        raise UnconvertableValue("Only dataclasses and pydantic classes supported")
+
+
+def from_pybind_value(value, typ:Type):
+    origin = get_origin(typ)
+    args = get_args(typ)
+
+    if origin is Optional:
+        typ = args[0]
+    elif origin in (Union, UnionType):
+        typ = next(a for a in args if a.__name__ == type(value).__name__)
+
+    if issubclass(typ, Enum):
+        return typ[value.name]
+    elif issubclass(typ, __IBaseModelNoCopy):
+        return typ(__pybind_impl__=value)
+    elif is_dataclass(typ) or issubclass(typ, BaseModel):
+        # This is quite inefficient
+        kwargs = {}
+        for field_name, field_type, _ in field_info_iter(typ):
+            kwargs[field_name] = from_pybind_value(getattr(value, field_name), field_type)
+        return typ(**kwargs)
+    else:
+        return value
 
 
 @slots_dataclass
@@ -61,11 +134,7 @@ def to_title(snake_str: str) -> str:
 
 def _getter(name: str, typ: Union[EnumType, Type]):
     def fn(self):
-        ret = getattr(self.pybind_impl, name)
-        if issubclass(typ, Enum):
-            ret = typ[ret.name]
-
-        return ret
+        return from_pybind_value(getattr(self.pybind_impl, name), typ)
 
     fn.__name__ = name
     fn.__annotations__ = {"return": typ}
@@ -75,10 +144,7 @@ def _getter(name: str, typ: Union[EnumType, Type]):
 
 def _setter(name: str, typ: Union[EnumType, Type]):
     def fn(self, value: Any):
-        if issubclass(typ, Enum):
-            value = get_pybind_type(typ)[value.name]
-
-        setattr(self.pybind_impl, name, value)
+        setattr(self.pybind_impl, name, _get_pybind_value(value))
 
     fn.__name__ = name
     fn.__annotations__ = {"value": typ}
@@ -88,13 +154,13 @@ def _setter(name: str, typ: Union[EnumType, Type]):
 
 class ModelMetaclassNoCopy(ModelMetaclass):
     def __new__(
-        mcs,
-        cls_name: str,
-        bases: tuple[type[Any], ...],
-        namespace: dict[str, Any],
-        __pydantic_generic_metadata__: PydanticGenericMetadata | None = None,
-        __pydantic_reset_parent_namespace__: bool = True,
-        **kwargs: Any,
+            mcs,
+            cls_name: str,
+            bases: tuple[type[Any], ...],
+            namespace: dict[str, Any],
+            __pydantic_generic_metadata__: PydanticGenericMetadata | None = None,
+            __pydantic_reset_parent_namespace__: bool = True,
+            **kwargs: Any,
     ) -> type:
         annotations = namespace.get("__annotations__", {})
 
@@ -152,20 +218,7 @@ def json_schema_extra(schema: Dict[str, Any], model_class: ModelMetaclassNoCopy)
         properties[alias] = field_schema
 
 
-class BaseModel(PydanticBaseModel):
-
-    def model_post_init(self, __context: Any):
-        self.__pybind_impl = get_pybind_type(
-            type(self))(**{name: getattr(self, name) for name in self.model_fields.keys()})\
-            if self.model_config.get("frozen") else None
-
-    @property
-    def pybind_impl(self):
-        return self.__pybind_impl or\
-            get_pybind_type(type(self))(**{name: getattr(self, name) for name in self.model_fields.keys()})
-
-
-class BaseModelNoCopy(PydanticBaseModel, metaclass=ModelMetaclassNoCopy):
+class BaseModelNoCopy(BaseModel, __IBaseModelNoCopy, metaclass=ModelMetaclassNoCopy):
     model_config = ConfigDict(json_schema_extra=json_schema_extra)
 
     @property
@@ -176,31 +229,32 @@ class BaseModelNoCopy(PydanticBaseModel, metaclass=ModelMetaclassNoCopy):
     def pybind_impl(self):
         return self.__pybind_impl
 
-    def __init__(self, **kwargs):
-        missing_required = []
-
-        for name, field_info in self.model_computed_fields.items():
-            value = kwargs.get(name, PydanticUndefined)
-            if value == PydanticUndefined:
-                if field_info.alias:
-                    value = kwargs.get(field_info.alias, PydanticUndefined)
-                    if issubclass(field_info.return_type, Enum):
-                        value = get_pybind_type(field_info.return_type)[value.name]
-
-                if value == PydanticUndefined:
-                    if field_info.required:
-                        missing_required.append(name)
-                else:
-                    kwargs.pop(name)
-                    kwargs[field_info.alias] = value
-
-            elif issubclass(field_info.return_type, Enum):
-                kwargs[name] = get_pybind_type(field_info.return_type)[value.name]
-
-        if missing_required:
-            raise RuntimeError(f"Missing required fields: {missing_required}")
-
+    def __init__(self, __pybind_impl__=None, **kwargs):
         super().__init__()
 
-        pybind_type = get_pybind_type(type(self))
-        self.__pybind_impl = pybind_type(**kwargs)
+        if __pybind_impl__:
+            self.__pybind_impl = __pybind_impl__
+        else:
+            missing_required = []
+
+            for name, field_info in self.model_computed_fields.items():
+                value = kwargs.get(name, PydanticUndefined)
+                if value == PydanticUndefined:
+                    if field_info.alias:
+                        value = kwargs.get(field_info.alias, PydanticUndefined)
+
+                    if value == PydanticUndefined:
+                        if field_info.required:
+                            missing_required.append(name)
+                    else:
+                        kwargs.pop(name)
+                        kwargs[field_info.alias] = value
+
+                if value != PydanticUndefined:
+                    kwargs[name] = _get_pybind_value(value)
+
+            if missing_required:
+                raise RuntimeError(f"Missing required fields: {missing_required}")
+
+            pybind_type = get_pybind_type(type(self))
+            self.__pybind_impl = pybind_type(**kwargs)

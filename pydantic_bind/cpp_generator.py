@@ -7,14 +7,14 @@ from itertools import chain
 from importlib import import_module
 from inspect import isclass
 from pathlib import Path
-from pydantic import BaseModel as PydanticBaseModel
+from pydantic import BaseModel
 from pydantic._internal._model_construction import ModelMetaclass
 from pydantic_core import PydanticUndefined
 from textwrap import TextWrapper
 from types import UnionType
-from typing import Any, Optional, Set, Tuple, Union, get_origin, get_args
+from typing import Any, Optional, Set, Tuple, Union, get_args, get_origin
 
-from pydantic_bind.base import BaseModel, BaseModelNoCopy
+from pydantic_bind.base import BaseModelNoCopy, field_info_iter
 
 __base_type_mappings = {
     bool: ("bool", None),
@@ -96,7 +96,7 @@ def cpp_type(typ) -> Tuple[str, Set[str]]:
                     origin = typ
                 else:
                     raise RuntimeError(f"Cannot use non parameterised collection {typ} as a type")
-            elif issubclass(typ, PydanticBaseModel) or is_dataclass(typ) or issubclass(typ, Enum):
+            elif issubclass(typ, BaseModel) or is_dataclass(typ) or issubclass(typ, Enum):
                 return typ.__name__, {f'"{typ.__module__.replace(dot, slash)}.h"'}
             else:
                 raise RuntimeError(f"Can only use builtins, datetime or BaseModel-derived types, not {typ}")
@@ -132,18 +132,6 @@ def cpp_type(typ) -> Tuple[str, Set[str]]:
             raise RuntimeError(f"Cannot handle type {typ}")
 
 
-def field_info_iter(model_class: ModelMetaclass):
-    if is_dataclass(model_class):
-        for field_name, field in model_class.__dataclass_fields__.items():
-            yield field_name, field.type, field.default
-    elif issubclass(model_class, BaseModelNoCopy):
-        for field_name, field in model_class.__pydantic_decorators__.computed_fields.items():
-            yield field_name, field.info.return_type, field.info.default
-    else:
-        for field_name, field in model_class.model_fields.items():
-            yield field_name, field.annotation, field.default
-
-
 def class_attrs(model_class: ModelMetaclass):
     types = []
     kwargs = []
@@ -159,7 +147,7 @@ def class_attrs(model_class: ModelMetaclass):
     pydantic_def = ".def_readonly" if frozen else ".def_readwrite"
     all_includes = {"<msgpack/msgpack.h>"}
     bases = [b for b in model_class.__bases__
-             if b not in (BaseModel, BaseModelNoCopy, PydanticBaseModel) and issubclass(b, PydanticBaseModel)
+             if b not in (BaseModelNoCopy, BaseModel) and issubclass(b, BaseModel)
              and b.__pydantic_decorators__.computed_fields]
     base_field_names = set(chain.from_iterable((n for n, _, _ in field_info_iter(b)) for b in bases))
     needs_default_constructor = False
@@ -253,8 +241,9 @@ def generate_class(model_class: ModelMetaclass, indent_size: int = 0, max_width:
     {indent}MSGPACK_DEFINE({', '.join(names)});
 {indent}}};"""
 
+    pydantic_bases = ", " + ", ".join(base.__name__ for base in base_init.keys()) if base_init else ""
     pydantic_init = "\n".join(args_wrapper.wrap(f"{', '.join(types)}>(), {', '.join(kwargs)}"))
-    pydantic_def = f"""{indent}py::class_<{cls_name}>(m, "{cls_name}")
+    pydantic_def = f"""{indent}py::class_<{cls_name}{pydantic_bases}>(m, "{cls_name}")
     {indent}.def(py::init<{pydantic_init})
     {indent}{newline_indent.join(pydantic_attrs)};"""
 
@@ -304,7 +293,7 @@ def generate_module(module_name: str, output_dir: str, indent_size: int = 4, max
             enum_def, pydantic_def = generate_enum(clz, indent_size, max_width)
             enum_defs.append(enum_def)
             pydantic_defs.append(pydantic_def)
-        elif is_dataclass(clz) or issubclass(clz, PydanticBaseModel):
+        elif is_dataclass(clz) or issubclass(clz, BaseModel):
             struct_def, pydantic_def, struct_includes = generate_class(clz, indent_size, max_width=max_width)
             if struct_def:
                 struct_defs.append(struct_def)
