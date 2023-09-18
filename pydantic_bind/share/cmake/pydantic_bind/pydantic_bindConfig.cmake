@@ -1,5 +1,8 @@
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
-find_package(pybind11 REQUIRED HINTS "${Python3_SITELIB}")
+find_package(pybind11 REQUIRED)
+
+include_directories("${Python3_SITELIB}/pydantic_bind/include")
+
 
 function(pydantic_bind_add_module)
     cmake_path(GET ARGN FILENAME target_name)
