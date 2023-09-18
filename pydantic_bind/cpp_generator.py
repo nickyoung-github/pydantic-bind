@@ -3,17 +3,18 @@ from collections.abc import Mapping, Sequence
 from dataclasses import MISSING, is_dataclass
 import datetime as dt
 from enum import Enum, EnumType
+from itertools import chain
 from importlib import import_module
 from inspect import isclass
 from pathlib import Path
-from pydantic import BaseModel
+from pydantic import BaseModel as PydanticBaseModel
 from pydantic._internal._model_construction import ModelMetaclass
 from pydantic_core import PydanticUndefined
 from textwrap import indent
 from types import UnionType
 from typing import Any, Optional, Set, Tuple, Union, get_origin, get_args
 
-from pydantic_bind.base import BaseModelNoCopy
+from pydantic_bind.base import BaseModel, BaseModelNoCopy
 
 __base_type_mappings = {
     bool: ("bool", None),
@@ -95,7 +96,7 @@ def cpp_type(typ) -> Tuple[str, Set[str]]:
                     origin = typ
                 else:
                     raise RuntimeError(f"Cannot use non parameterised collection {typ} as a type")
-            elif issubclass(typ, BaseModel) or is_dataclass(typ) or issubclass(typ, Enum):
+            elif issubclass(typ, PydanticBaseModel) or is_dataclass(typ) or issubclass(typ, Enum):
                 return typ.__name__, {f'"{typ.__module__.replace(dot, slash)}.h"'}
             else:
                 raise RuntimeError(f"Can only use builtins, datetime or BaseModel-derived types, not {typ}")
@@ -136,57 +137,92 @@ def generate_enum(enum_typ: EnumType):
     return f"""enum {enum_typ.__name__} {{ {', '.join(items)} }};"""
 
 
-def generate_class(model_class: ModelMetaclass) -> Tuple[Optional[str], Optional[str], Optional[Tuple[str, ...]]]:
-    def field_info_iter():
-        if is_dataclass(model_class):
-            for field_name, field in model_class.__dataclass_fields__.items():
-                yield field_name, field.type, field.default
-        elif issubclass(model_class, BaseModelNoCopy):
-            for field_name, field in model_class.__pydantic_decorators__.computed_fields.items():
-                yield field_name, field.info.return_type, field.info.default
-        else:
-            for field_name, field in model_class.model_fields.items():
-                yield field_name, field.annotation, field.default
+def field_info_iter(model_class: ModelMetaclass):
+    if is_dataclass(model_class):
+        for field_name, field in model_class.__dataclass_fields__.items():
+            yield field_name, field.type, field.default
+    elif issubclass(model_class, BaseModelNoCopy):
+        for field_name, field in model_class.__pydantic_decorators__.computed_fields.items():
+            yield field_name, field.info.return_type, field.info.default
+    else:
+        for field_name, field in model_class.model_fields.items():
+            yield field_name, field.annotation, field.default
 
-    frozen = model_class.__dataclass_params__.frozen if is_dataclass(model_class) else \
-        model_class.model_config.get("frozen")
+
+def gubbins(model_class: ModelMetaclass):
     types = []
     kwargs = []
     constructor_args = []
     init_args = []
+    default_init_args = []
     struct_members = []
     pydantic_attrs = []
     names = []
-    all_includes = {"<msgpack/msgpack.h>"}
-    pydantic_def = ".def_readonly" if frozen else ".def_readwrite"
-    cls_name = model_class.__name__
-    newline = "\n    "
 
-    for name, field_type, default in field_info_iter():
-        names.append(name)
+    frozen = model_class.__dataclass_params__.frozen if is_dataclass(model_class) else \
+        model_class.model_config.get("frozen")
+    pydantic_def = ".def_readonly" if frozen else ".def_readwrite"
+    all_includes = {"<msgpack/msgpack.h>"}
+    bases = [b for b in model_class.__bases__
+             if b not in (BaseModel, BaseModelNoCopy, PydanticBaseModel) and issubclass(b, PydanticBaseModel)
+             and b.__pydantic_decorators__.computed_fields]
+    base_field_names = set(chain.from_iterable((n for n, _, _ in field_info_iter(b)) for b in bases))
+    needs_default_constructor = False
+
+    for name, field_type, default in field_info_iter(model_class):
         typ, includes = cpp_type(field_type)
         all_includes.update(includes)
-        default = cpp_default(default)
-        default_suffix = f'={default}' if default else ""
         move = field_type not in __no_move_types
+        default = cpp_default(default)
         position = len(types) if default else 0  # Need to ensure non-defaulted params are first
+        names.insert(position, name)
+
+        default_suffix = ""
+        if default:
+            default_suffix = f'={default}'
+        else:
+            needs_default_constructor = True
 
         constructor_args.insert(position, f"{typ} {name + default_suffix}")
-        init_args.insert(position, f"{name}({name if not move else f'std::move({name})'})")
         kwargs.insert(position, f'py::arg("{name}")' + default_suffix)
         types.insert(position, typ)
-        struct_members.insert(position, f"{typ} {name};")
-        pydantic_attrs.insert(position, f'{pydantic_def}("{name}", &{cls_name}::{name})')
+
+        if name not in base_field_names:
+            init_args.insert(position, f"{name}({name if not move else f'std::move({name})'})")
+            default_init_args.insert(position, f"{name}({default or ''})")
+            struct_members.insert(position, f"{typ} {name};")
+            pydantic_attrs.insert(position, f'{pydantic_def}("{name}", &{model_class.__name__}::{name})')
+
+    base_init = {b: gubbins(b)[0] for b in bases}
+    return names, constructor_args, init_args, default_init_args if needs_default_constructor else [], base_init,\
+        types, kwargs, struct_members, pydantic_attrs, all_includes
+
+
+def generate_class(model_class: ModelMetaclass) -> Tuple[Optional[str], Optional[str], Optional[Tuple[str, ...]]]:
+    names, constructor_args, init_args, default_init_args, base_init, types, kwargs, struct_members, pydantic_attrs,\
+        all_includes = gubbins(model_class)
 
     if not types:
         return None, None, None
 
+    cls_name = model_class.__name__
+    newline = "\n    "
+    bases = f" : public {', '.join(b.__name__ for b in base_init.keys())}" if base_init else ""
+    default_constructor = f"""{cls_name}() :
+        {newline.join(base.__name__ + '()' for base in base_init.keys()) + ',' + newline + '    'if base_init else ""}\
+{', '.join(default_init_args)}
+    {{
+    }}
+
+    """ if default_init_args else ""
+
     # ToDo: wrap lines
 
-    struct_def = f"""struct {cls_name}
+    struct_def = f"""struct {cls_name}{bases}
 {{
-    {cls_name}({', '.join(constructor_args)}) :
-        {', '.join(init_args)}
+    {default_constructor}{cls_name}({', '.join(constructor_args)}) :
+        {newline.join(base.__name__ + '(' + ', '.join(base_args) + ')' for base, base_args in base_init.items()) + ',' +
+         newline + '    ' if base_init else ""}{', '.join(init_args)}
     {{
     }}
 
@@ -226,7 +262,7 @@ def generate_module(module_name: str, output_dir: str):
     for clz in (v for v in vars(module).values() if isclass(v)):
         if clz is not Enum and issubclass(clz, Enum):
             enum_defs.append(generate_enum(clz))
-        elif is_dataclass(clz) or issubclass(clz, BaseModel):
+        elif is_dataclass(clz) or issubclass(clz, PydanticBaseModel):
             struct, pydantic, struct_includes = generate_class(clz)
             if struct:
                 struct_defs.append(struct)

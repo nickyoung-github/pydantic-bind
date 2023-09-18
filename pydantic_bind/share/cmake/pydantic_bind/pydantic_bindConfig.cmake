@@ -30,7 +30,7 @@ function(pydantic_bind_add_module)
             COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH="${PROJECT_SOURCE_DIR}" ${Python3_EXECUTABLE} "${Python3_SITELIB}/pydantic_bind/cpp_generator.py" --module ${module} --output_dir ${output_dir}
     )
 
-    pybind11_add_module(${target_name} "${target_cpp}")
+    pybind11_add_module(${target_name} "${target_cpp}" "${target_header}")
     set_target_properties(${target_name} PROPERTIES PUBLIC_HEADER "${target_header}")
 
     install(TARGETS ${target_name}

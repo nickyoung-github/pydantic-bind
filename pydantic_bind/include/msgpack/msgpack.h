@@ -5,16 +5,17 @@
 #ifndef CPPACK_PACKER_HPP
 #define CPPACK_PACKER_HPP
 
-#include <vector>
-#include <set>
-#include <list>
-#include <map>
-#include <unordered_map>
 #include <array>
+#include <bitset>
 #include <chrono>
 #include <cmath>
-#include <bitset>
+#include <list>
+#include <map>
+#include <optional>
+#include <set>
 #include <system_error>
+#include <unordered_map>
+#include <vector>
 
 
 #define MSGPACK_DEFINE(args...) \
@@ -513,6 +514,15 @@ namespace msgpack {
         }
     }
 
+    template<>
+    inline
+    void Packer::pack_type(const std::optional<T> &value) {
+        if (!value)
+            serialized_object.emplace_back(nil);
+        else
+            pack_type(*value);
+    }
+
     class Unpacker {
     public:
         Unpacker() : data_pointer(nullptr), data_end(nullptr) {};
@@ -594,7 +604,6 @@ namespace msgpack {
                     array_size += uint32_t(safe_data()) << 8 * (i - 1);
                     safe_increment();
                 }
-                std::vector<uint32_t> x{};
                 for (auto i = 0U; i < array_size; ++i) {
                     ValueType val{};
                     unpack_type(val);
@@ -642,7 +651,6 @@ namespace msgpack {
                     map_size += uint32_t(safe_data()) << 8 * (i - 1);
                     safe_increment();
                 }
-                std::vector<uint32_t> x{};
                 for (auto i = 0U; i < map_size; ++i) {
                     KeyType key{};
                     MappedType value{};
