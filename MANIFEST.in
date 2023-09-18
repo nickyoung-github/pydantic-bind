@@ -1,1 +1,1 @@
-include share/*
+include share/cmake/pydantic-bind/*
