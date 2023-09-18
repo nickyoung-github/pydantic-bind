@@ -157,7 +157,7 @@ def generate_class(model_class: ModelMetaclass) -> Tuple[Optional[str], Optional
     struct_members = []
     pydantic_attrs = []
     names = []
-    all_includes = {"#include <msgpack/msgpack.h>"}
+    all_includes = {"<msgpack/msgpack.h>"}
     pydantic_def = ".def_readonly" if frozen else ".def_readwrite"
     cls_name = model_class.__name__
     newline = "\n    "
