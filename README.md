@@ -12,13 +12,13 @@
 ## Overview
 
 This project has helpers for automatically generating C++ structs and corresponding pybind marshalling code for 
-dataclasses and pydantc-based classes.
+dataclasses and pydantic-based classes.
 
 This is achieved via a cmake rule: `pydantic_bind_add_module(<path to module>)`
 
 Add a module this way and it will be scanned for:
 - dataclasses
-- classes derived from pydantc's BaseModel
+- classes derived from pydantic's BaseModel
 - enums
 
 For any of these which are encountered, a definition will be added to a .h file, with relative path matching the module
