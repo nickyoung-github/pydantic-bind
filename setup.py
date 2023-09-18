@@ -3,7 +3,7 @@ from setuptools import find_packages, setup
 # ToDo: Add versioneer
 
 setup(name="pydantic_bind",
-      version="1.1.7",
+      version="1.1.8",
       description="C++/pybind generation from Pydantic classes",
       author="Nick Young",
       license=r"https://www.apache.org/licenses/LICENSE-2.0",
