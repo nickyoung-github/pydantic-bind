@@ -5,9 +5,11 @@ from importlib import import_module
 from pydantic import BaseModel as BaseModel, ConfigDict, computed_field
 from pydantic.fields import ComputedFieldInfo, FieldInfo
 from pydantic.json_schema import GenerateJsonSchema
+from pydantic._internal._config import ConfigWrapper
 from pydantic._internal._decorators import Decorator
 from pydantic._internal._internal_dataclass import slots_dataclass
-from pydantic._internal._model_construction import ModelMetaclass, PydanticGenericMetadata
+from pydantic._internal._model_construction import ModelMetaclass, PydanticGenericMetadata, generate_model_signature
+from pydantic._internal._utils import ClassAttribute
 from pydantic_core import PydanticUndefined
 import sys
 from types import UnionType
@@ -162,7 +164,9 @@ class ModelMetaclassNoCopy(ModelMetaclass):
             __pydantic_reset_parent_namespace__: bool = True,
             **kwargs: Any,
     ) -> type:
+        config_wrapper = ConfigWrapper.for_model(bases, namespace, kwargs)
         annotations = namespace.get("__annotations__", {})
+        field_infos = {}
 
         if annotations:
             # Rewrite annotations as properties, with getters and setters which interact with the attributes
@@ -174,10 +178,12 @@ class ModelMetaclassNoCopy(ModelMetaclass):
                 value = namespace.get(name, PydanticUndefined)
                 field = computed_field(property(fget=_getter(name, typ), fset=_setter(name, typ)))
                 if isinstance(value, FieldInfo):
+                    field_infos[name] = value
                     field.decorator_info = PropertyFieldInfo.from_field_info(value,
                                                                              field.decorator_info.wrapped_property)
                 else:
                     field.decorator_info = PropertyFieldInfo.from_computed_field_info(field.decorator_info, value)
+                    field_infos[name] = FieldInfo(annotation=typ, default=value)
 
                 field.decorator_info.title = to_title(name)
                 properties[name] = field
@@ -186,12 +192,13 @@ class ModelMetaclassNoCopy(ModelMetaclass):
                 annotations.pop(name)
                 namespace[name] = prop
 
-            # ToDo: add signature
+        cls = cast(ModelMetaclass, super().__new__(mcs, cls_name, bases, namespace, **kwargs))
+        cls.__pydantic_decorators__.__annotations__["computed_fields"] = dict[str, Decorator[PropertyFieldInfo]]
+        cls.__signature__ = ClassAttribute(
+            '__signature__', generate_model_signature(cls.__init__, field_infos, config_wrapper)
+        )
 
-        ret = cast(ModelMetaclass, super().__new__(mcs, cls_name, bases, namespace, **kwargs))
-        ret.__pydantic_decorators__.__annotations__["computed_fields"] = dict[str, Decorator[PropertyFieldInfo]]
-
-        return ret
+        return cls
 
 
 def json_schema_extra(schema: Dict[str, Any], model_class: ModelMetaclassNoCopy) -> None:
@@ -229,9 +236,10 @@ class BaseModelNoCopy(BaseModel, __IBaseModelNoCopy, metaclass=ModelMetaclassNoC
     def pybind_impl(self):
         return self.__pybind_impl
 
-    def __init__(self, __pybind_impl__=None, **kwargs):
+    def __init__(self, **kwargs):
         super().__init__()
 
+        __pybind_impl__ = kwargs.pop("__pybind_impl__", None)
         if __pybind_impl__:
             self.__pybind_impl = __pybind_impl__
         else:
