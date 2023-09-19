@@ -119,6 +119,8 @@ Headers are installed to `<top level>/include`
 
 Compiled pybind modules are installed into `<original module path>/__pybind__`
 
+For C++ usage, you need only the headers, the compiled code is for pybind/python usage only
+
 For the example below, `common_object_model/common_object_model/v1/common/__pybind__/foo.cpython-311-darwin.so` will
 be installed (obviously with corresponding qualifiers for Linux/Windows). `get_pybind_value()` searches this
 directory
@@ -286,6 +288,7 @@ will generate the following files:
             .value("SUNDAY", Weekday::SUNDAY);
 
         py::class_<DCFoo>(m, "DCFoo")
+            .def(py::init<>())
             .def(py::init<std::optional<std::string>, int>(), py::arg("my_string"), py::arg("my_int"))
             .def_readwrite("my_string", &DCFoo::my_string)
             .def_readwrite("my_int", &DCFoo::my_int);
@@ -296,6 +299,7 @@ will generate the following files:
             .def_readwrite("my_day", &Foo::my_day);
     
         py::class_<Bar>(m, "Bar")
+            .def(py::init<>())
             .def(py::init<std::string, bool, Weekday, int, std::optional<std::string>>(), py::arg("my_string"), py::arg("my_bool")=true,
                 py::arg("my_day")=SUNDAY, py::arg("my_int")=123, py::arg("my_optional_string")=std::nullopt)
             .def_readwrite("my_string", &Bar::my_string)
@@ -303,6 +307,7 @@ will generate the following files:
             .def_readwrite("my_optional_string", &Bar::my_optional_string);
     
         py::class_<Baz>(m, "Baz")
+            .def(py::init<>())
             .def(py::init<DCFoo, Foo, std::chrono::system_clock::time_point, std::variant<std::string, double>>(), py::arg("my_dc_foo"),
                 py::arg("my_foo"), py::arg("my_date"), py::arg("my_variant")=123.0)
             .def_readwrite("my_dc_foo", &Baz::my_dc_foo)

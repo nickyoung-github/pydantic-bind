@@ -200,6 +200,14 @@ namespace msgpack {
         }
 
         template<class T>
+        void pack_type(const std::optional<T> &value) {
+            if (!value)
+                serialized_object.emplace_back(nil);
+            else
+                pack_type(*value);
+        }
+
+        template<class T>
         void pack_array(const T &array) {
             if (array.size() < 16) {
                 auto size_mask = uint8_t(0b10010000);
@@ -512,15 +520,6 @@ namespace msgpack {
         for (const auto &elem : value) {
             serialized_object.emplace_back(elem);
         }
-    }
-
-    template<>
-    inline
-    void Packer::pack_type(const std::optional<T> &value) {
-        if (!value)
-            serialized_object.emplace_back(nil);
-        else
-            pack_type(*value);
     }
 
     class Unpacker {

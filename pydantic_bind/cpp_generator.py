@@ -198,6 +198,7 @@ def generate_class(model_class: ModelMetaclass, indent_size: int = 0, max_width:
     cls_name = model_class.__name__
     bases = f" : public {', '.join(b.__name__ for b in base_init.keys())}" if base_init else ""
     default_constructor = ""
+    default_pydantic_init = ""
     indent = " " * indent_size
     newline = "\n"
     newline_indent = f"{newline}    {indent}"
@@ -209,6 +210,7 @@ def generate_class(model_class: ModelMetaclass, indent_size: int = 0, max_width:
 
     if default_init_args:
         default_constructor = f"{indent}{cls_name}() :\n"
+        default_pydantic_init = f"{indent}.def(py::init<>())\n"
 
         if base_init:
             default_constructor += \
@@ -244,8 +246,7 @@ def generate_class(model_class: ModelMetaclass, indent_size: int = 0, max_width:
     pydantic_bases = ", " + ", ".join(base.__name__ for base in base_init.keys()) if base_init else ""
     pydantic_init = "\n".join(args_wrapper.wrap(f"{', '.join(types)}>(), {', '.join(kwargs)}"))
     pydantic_def = f"""{indent}py::class_<{cls_name}{pydantic_bases}>(m, "{cls_name}")
-    {indent}.def(py::init<>())
-    {indent}.def(py::init<{pydantic_init})
+    {default_pydantic_init}{indent}.def(py::init<{pydantic_init})
     {indent}{newline_indent.join(pydantic_attrs)};"""
 
     return struct_def, pydantic_def, tuple(f"#include {i}" for i in sorted(all_includes))
@@ -271,8 +272,9 @@ def generate_enum(enum_typ: EnumType, indent_size: int = 0, max_width: int = 110
 def generate_module(module_name: str, output_dir: str, indent_size: int = 4, max_width: int = 110):
     single_newline = "\n"
     double_newline = "\n\n"
-    dot = r'.'
-    slash = r'/'
+    dot = r"."
+    slash = r"/"
+    indent = " " * indent_size
 
     module = import_module(module_name)
     generated_root = Path(output_dir)
@@ -304,9 +306,17 @@ def generate_module(module_name: str, output_dir: str, indent_size: int = 4, max
                 if self_include in includes:
                     includes.remove(self_include)
 
+    imports = []
+    for include in (i for i in includes if namespace in i):
+        import_parts = include.split(slash)
+        import_parts.insert(-2, "__pybind__")
+        imprt = '.'.join(import_parts).replace('#include ', '').replace('.h', '')
+        imports.append(f"{indent}py::module_::import({imprt});")
+
     enum_contents = f"\n{double_newline.join(enum_defs)}{single_newline if struct_defs else ''}" if enum_defs else ""
     struct_contents = f"\n{double_newline.join(struct_defs)}" if struct_defs else ""
     include_contents = f"\n{single_newline.join(includes)}\n" if includes else ""
+    import_contents = f"\n{single_newline.join(imports)}\n" if imports else ""
 
     header_contents = f"""
 #ifndef {guard}
@@ -331,7 +341,7 @@ using namespace {namespace};
 
 
 PYBIND11_MODULE({module_base_name}, m)
-{{
+{{{import_contents}
 {double_newline.join(pydantic_defs)}
 }}
 """

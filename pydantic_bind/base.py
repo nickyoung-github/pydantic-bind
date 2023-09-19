@@ -269,11 +269,12 @@ class BaseModelNoCopy(BaseModel, __IBaseModelNoCopy, metaclass=ModelMetaclassNoC
             self.__pybind_impl = pybind_type(**kwargs)
 
 
-def __dc_init(init):
+def __dataclass_init(init):
     @wraps(init)
     def wrapper(self, *args, __pybind_impl__=None, **kwargs):
-        self.__pybind_impl = __pybind_impl__ or get_pybind_type(type(self))()
-        return init(self, *args, **kwargs)
+        self.pybind_impl = __pybind_impl__ or get_pybind_type(type(self))()
+        init(self, *args, **kwargs)
+        arse = True
 
     return wrapper
 
@@ -288,7 +289,7 @@ def dataclass(cls=None, /, *, init=True, repr=True, eq=True, order=False,
     for name, field in ret.__dataclass_fields__.items():
         setattr(cls, name, property(fget=_getter(name, field.type), fset=_setter(name, field.type)))
 
-    ret.__init__ = __dc_init(ret.__init__)
+    ret.__init__ = __dataclass_init(ret.__init__)
     ret.__no_copy__ = True
 
     return ret
