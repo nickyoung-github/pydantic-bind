@@ -67,10 +67,14 @@ You can create an instance of the pybind class from your original using `get_pyb
 ## No Copy
 
 What if you would like a single representation of the data, shared between C++ and python. Then fear not,
-`base.BaseModelNoCopy` is your friend! Deriving from this class will result in the annotations for the pydantic class
-being re-written using `computed_field`, with property getters and setters operating on the generated pybind class.
+`BaseModelNoCopy` and `dataclass` are your friends!
 
-`BaseModelNoCopy.__init__` will create the corresponding pybind class, using the supplied values.
+Deriving from this `BaseModelNoCopy` will give you equivalent functionality of as pydantic's `BaseModel`. The
+annotations are re-written using `computed_field`, with property getters and setters operating on the generated pybind
+class, which is instantiated behind the scenes in `init`
+
+`dataclass` works similarly, adding properties to the dataclass, so that the exisitng get and set functionality works
+seamless in accessing the generated pybind class (also set via a shimmed `init`)
 
 
 ## Supported Types

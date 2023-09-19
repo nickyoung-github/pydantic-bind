@@ -244,6 +244,7 @@ def generate_class(model_class: ModelMetaclass, indent_size: int = 0, max_width:
     pydantic_bases = ", " + ", ".join(base.__name__ for base in base_init.keys()) if base_init else ""
     pydantic_init = "\n".join(args_wrapper.wrap(f"{', '.join(types)}>(), {', '.join(kwargs)}"))
     pydantic_def = f"""{indent}py::class_<{cls_name}{pydantic_bases}>(m, "{cls_name}")
+    {indent}.def(py::init<>())
     {indent}.def(py::init<{pydantic_init})
     {indent}{newline_indent.join(pydantic_attrs)};"""
 

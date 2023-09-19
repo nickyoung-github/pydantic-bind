@@ -1,6 +1,6 @@
-from dataclasses import is_dataclass
+from dataclasses import dataclass as orig_dataclass, is_dataclass
 from enum import Enum, EnumType
-from functools import cache
+from functools import cache, wraps
 from importlib import import_module
 from pydantic import BaseModel as BaseModel, ConfigDict, computed_field
 from pydantic.fields import ComputedFieldInfo, FieldInfo
@@ -84,9 +84,10 @@ def _get_pybind_value(obj, default_to_self: bool = True):
         raise UnconvertableValue("Only dataclasses and pydantic classes supported")
 
 
-def from_pybind_value(value, typ:Type):
+def from_pybind_value(value, typ: Type):
     origin = get_origin(typ)
     args = get_args(typ)
+    is_dc = is_dataclass(typ)
 
     if origin is Optional:
         typ = args[0]
@@ -95,9 +96,9 @@ def from_pybind_value(value, typ:Type):
 
     if issubclass(typ, Enum):
         return typ[value.name]
-    elif issubclass(typ, __IBaseModelNoCopy):
+    elif issubclass(typ, __IBaseModelNoCopy) or (is_dc and hasattr(typ, "__no_copy__")):
         return typ(__pybind_impl__=value)
-    elif is_dataclass(typ) or issubclass(typ, BaseModel):
+    elif is_dc or issubclass(typ, BaseModel):
         # This is quite inefficient
         kwargs = {}
         for field_name, field_type, _ in field_info_iter(typ):
@@ -266,3 +267,28 @@ class BaseModelNoCopy(BaseModel, __IBaseModelNoCopy, metaclass=ModelMetaclassNoC
 
             pybind_type = get_pybind_type(type(self))
             self.__pybind_impl = pybind_type(**kwargs)
+
+
+def __dc_init(init):
+    @wraps(init)
+    def wrapper(self, *args, __pybind_impl__=None, **kwargs):
+        self.__pybind_impl = __pybind_impl__ or get_pybind_type(type(self))()
+        return init(self, *args, **kwargs)
+
+    return wrapper
+
+
+def dataclass(cls=None, /, *, init=True, repr=True, eq=True, order=False,
+              unsafe_hash=False, frozen=False, match_args=True,
+              kw_only=False, slots=False, weakref_slot=False):
+
+    ret = orig_dataclass(cls, init=init, repr=repr, eq=eq, order=order, unsafe_hash=unsafe_hash, frozen=frozen,
+                         match_args=match_args, kw_only=kw_only, slots=slots, weakref_slot=weakref_slot)
+
+    for name, field in ret.__dataclass_fields__.items():
+        setattr(cls, name, property(fget=_getter(name, field.type), fset=_setter(name, field.type)))
+
+    ret.__init__ = __dc_init(ret.__init__)
+    ret.__no_copy__ = True
+
+    return ret
