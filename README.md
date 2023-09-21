@@ -112,9 +112,10 @@ The following python -> C++ mappings are supported (there are likely others I sh
 - datetime.time --> std::chrono::system_clock::time_point
 - datetime.timedelta --> std::chrono::duration
 - pydantic.BaseModel --> struct
-- pydantic_bind.BaseModelNoCopy --> struct
+- pydantic_bind.BaseModel --> struct
 - dataclass --> struct
-- Enum -> enum
+- pydantic_bind.dataclass --> struct
+- Enum --> enum
 
 ## Inheritance
 
@@ -162,7 +163,7 @@ completely rigorously.
     from enum import Enum, auto
     from typing import Union
 
-    from pydantic_bind import BaseModelNoCopy
+    from pydantic_bind import BaseModel
 
 
     class Weekday(Enum):
@@ -181,7 +182,7 @@ completely rigorously.
         my_string: str | None
     
     
-    class Foo(BaseModelNoCopy):
+    class Foo(BaseModel):
         my_bool: bool = True
         my_day: Weekday = Weekday.SUNDAY
     
@@ -192,7 +193,7 @@ completely rigorously.
         my_optional_string: str | None = None
     
     
-    class Baz(BaseModelNoCopy):
+    class Baz(BaseModel):
         my_variant: Union[str, float] = 123.
         my_date: dt.date
         my_foo: Foo
