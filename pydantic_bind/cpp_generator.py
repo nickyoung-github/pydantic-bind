@@ -7,14 +7,14 @@ from itertools import chain
 from importlib import import_module
 from inspect import isclass
 from pathlib import Path
-from pydantic import BaseModel
+from pydantic import BaseModel as PydanticBaseModel
 from pydantic._internal._model_construction import ModelMetaclass
 from pydantic_core import PydanticUndefined
 from textwrap import TextWrapper
 from types import UnionType
 from typing import Any, Optional, Set, Tuple, Union, get_args, get_origin
 
-from pydantic_bind.base import BaseModelNoCopy, field_info_iter
+from pydantic_bind.base import BaseModel, field_info_iter
 
 __base_type_mappings = {
     bool: ("bool", None),
@@ -96,7 +96,7 @@ def cpp_type(typ) -> Tuple[str, Set[str]]:
                     origin = typ
                 else:
                     raise RuntimeError(f"Cannot use non parameterised collection {typ} as a type")
-            elif issubclass(typ, BaseModel) or is_dataclass(typ) or issubclass(typ, Enum):
+            elif issubclass(typ, PydanticBaseModel) or is_dataclass(typ) or issubclass(typ, Enum):
                 return typ.__name__, {f'"{typ.__module__.replace(dot, slash)}.h"'}
             else:
                 raise RuntimeError(f"Can only use builtins, datetime or BaseModel-derived types, not {typ}")
@@ -147,7 +147,7 @@ def class_attrs(model_class: ModelMetaclass):
     pydantic_def = ".def_readonly" if frozen else ".def_readwrite"
     all_includes = {"<msgpack/msgpack.h>"}
     bases = [b for b in model_class.__bases__
-             if b not in (BaseModelNoCopy, BaseModel) and issubclass(b, BaseModel)
+             if b not in (BaseModel, PydanticBaseModel) and issubclass(b, BaseModel)
              and b.__pydantic_decorators__.computed_fields]
     base_field_names = set(chain.from_iterable((n for n, _, _ in field_info_iter(b)) for b in bases))
     needs_default_constructor = False
@@ -210,7 +210,7 @@ def generate_class(model_class: ModelMetaclass, indent_size: int = 0, max_width:
 
     if default_init_args:
         default_constructor = f"{indent}{cls_name}() :\n"
-        default_pydantic_init = f"{indent}.def(py::init<>())\n"
+        default_pydantic_init = f"{indent}.def(py::init<>())\n{indent}"
 
         if base_init:
             default_constructor += \
@@ -247,6 +247,8 @@ def generate_class(model_class: ModelMetaclass, indent_size: int = 0, max_width:
     pydantic_init = "\n".join(args_wrapper.wrap(f"{', '.join(types)}>(), {', '.join(kwargs)}"))
     pydantic_def = f"""{indent}py::class_<{cls_name}{pydantic_bases}>(m, "{cls_name}")
     {default_pydantic_init}{indent}.def(py::init<{pydantic_init})
+    {indent}.def("to_msg_pack", &{cls_name}::to_msg_pack)
+    {indent}.def_static("from_msg_pack", &{cls_name}::from_msg_pack<{cls_name}>)
     {indent}{newline_indent.join(pydantic_attrs)};"""
 
     return struct_def, pydantic_def, tuple(f"#include {i}" for i in sorted(all_includes))
@@ -309,7 +311,7 @@ def generate_module(module_name: str, output_dir: str, indent_size: int = 4, max
     imports = []
     for include in (i for i in includes if namespace in i):
         import_parts = include.split(slash)
-        import_parts.insert(-2, "__pybind__")
+        import_parts.insert(-1, "__pybind__")
         imprt = '.'.join(import_parts).replace('#include ', '').replace('.h', '')
         imports.append(f"{indent}py::module_::import({imprt});")
 

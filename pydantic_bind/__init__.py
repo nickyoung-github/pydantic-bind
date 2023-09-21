@@ -1,7 +1,7 @@
-from .base import BaseModelNoCopy, dataclass, get_pybind_type, get_pybind_value
+from .base import BaseModel, dataclass, get_pybind_type, get_pybind_value
 
 __all__ = (
-    BaseModelNoCopy,
+    BaseModel,
     dataclass,
     get_pybind_type,
     get_pybind_value

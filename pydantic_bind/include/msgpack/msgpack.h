@@ -14,16 +14,10 @@
 #include <optional>
 #include <set>
 #include <system_error>
+#include <type_traits>
 #include <unordered_map>
+#include <variant>
 #include <vector>
-
-
-#define MSGPACK_DEFINE(args...) \
-    template<class T> \
-    void pack(T &packer) \
-    { \
-        packer(args); \
-    }
 
 
 namespace msgpack {
@@ -99,7 +93,9 @@ namespace msgpack {
         array16 = 0xdc,
         array32 = 0xdd,
         map16 = 0xde,
-        map32 = 0xdf
+        map32 = 0xdf,
+        optional = 0xe0,
+        variant = 0xe1
     };
 
     template<class T>
@@ -157,6 +153,26 @@ namespace msgpack {
         static const bool value = true;
     };
 
+    template<class T>
+    struct is_optional {
+        static const bool value = false;
+    };
+
+    template<class T>
+    struct is_optional<std::optional<T> > {
+        static const bool value = true;
+    };
+
+    template<class... Ts>
+    struct is_variant {
+        static const bool value = false;
+    };
+
+    template<class... Ts>
+    struct is_variant<std::variant<Ts...> > {
+        static const bool value = true;
+    };
+
     class Packer {
     public:
 
@@ -182,11 +198,18 @@ namespace msgpack {
         std::vector<uint8_t> serialized_object;
 
         template<class T>
-        void pack_type(const T &value) {
+        void pack_type(const T &value)
+        {
             if constexpr(is_map<T>::value) {
                 pack_map(value);
-            } else if constexpr (is_container<T>::value || is_stdarray<T>::value) {
+            } else if constexpr(is_container<T>::value || is_stdarray<T>::value) {
                 pack_array(value);
+            } else if constexpr(is_optional<T>::value) {
+                pack_optional(value);
+            } else if constexpr(is_variant<T>::value) {
+                pack_variant(value);
+            } else if constexpr(std::is_enum<T>::value) {
+                pack_enum(value);
             } else {
                 auto recursive_packer = Packer{};
                 const_cast<T &>(value).pack(recursive_packer);
@@ -195,16 +218,28 @@ namespace msgpack {
         }
 
         template<class T>
-        void pack_type(const std::chrono::time_point<T> &value) {
-            pack_type(value.time_since_epoch().count());
+        void pack_optional(const std::optional<T> &value) {
+            serialized_object.emplace_back(optional);
+            pack_type(value.has_value());
+            if (value.has_value())
+                pack_type(value.value());
+        }
+
+        template<class... Ts>
+        void pack_variant(const std::variant<Ts...> &value) {
+            serialized_object.emplace_back(variant);
+            pack_type((uint16_t)value.index());
+            std::visit([this](auto const& v){this->pack_type(v);}, value);
         }
 
         template<class T>
-        void pack_type(const std::optional<T> &value) {
-            if (!value)
-                serialized_object.emplace_back(nil);
-            else
-                pack_type(*value);
+        void pack_enum(const T& value) {
+            pack_type(static_cast<const uint16_t&>(value));
+        }
+
+        template<class T>
+        void pack_type(const std::chrono::time_point<T> &value) {
+            pack_type(value.time_since_epoch().count());
         }
 
         template<class T>
@@ -550,6 +585,30 @@ namespace msgpack {
         const uint8_t *data_pointer;
         const uint8_t *data_end;
 
+        template<class V, uint16_t N = std::variant_size_v<V>>
+        struct variant_by_index {
+            void unpack(uint16_t i, Unpacker &unpacker, V &value) {
+                if (i >= std::variant_size_v<V>) {
+                    throw std::invalid_argument("bad type index.");
+                }
+                constexpr uint16_t index = std::variant_size_v<V> - N;
+                if (i == index) {
+                    std::variant_alternative_t<index, V> variant_value;
+                    unpacker.unpack_type(variant_value);
+                    value = variant_value;
+                } else {
+                    variant_by_index<V, N - 1>().unpack(i, unpacker, value);
+                }
+            }
+        };
+
+        template<typename V>
+        struct variant_by_index<V, 0> {
+            void unpack(uint16_t i, Unpacker &unpacker, V &value) {
+                throw std::bad_variant_access();
+            }
+        };
+
         uint8_t safe_data() {
             if (data_pointer < data_end)
                 return *data_pointer;
@@ -573,6 +632,12 @@ namespace msgpack {
                 unpack_array(value);
             } else if constexpr (is_stdarray<T>::value) {
                 unpack_stdarray(value);
+            } else if constexpr (is_optional<T>::value) {
+                unpack_optional(value);
+            } else if constexpr (is_variant<T>::value) {
+                unpack_variant(value);
+            } else if constexpr(std::is_enum<T>::value) {
+                unpack_enum(value);
             } else {
                 auto recursive_data = std::vector<uint8_t>{};
                 unpack_type(recursive_data);
@@ -581,6 +646,37 @@ namespace msgpack {
                 value.pack(recursive_unpacker);
                 ec = recursive_unpacker.ec;
             }
+        }
+
+        template<class T>
+        void unpack_optional(T &value) {
+            if (safe_data() == optional) {
+                safe_increment();
+                bool is_set;
+                unpack_type(is_set);
+                if (is_set) {
+                    typename T::value_type optional_value;
+                    unpack_type(optional_value);
+                    value = optional_value;
+                }
+            }
+        }
+
+        template <class T>
+        void unpack_variant(T &value) {
+            if (safe_data() == variant) {
+                safe_increment();
+                uint16_t index;
+                unpack_type(index);
+                variant_by_index<T>().unpack(index, *this, value);
+            }
+        }
+
+        template<class T>
+        void unpack_enum(T &value) {
+            uint16_t int_value;
+            unpack_type(int_value);
+            value = static_cast<T>(int_value);
         }
 
         template<class Clock, class Duration>
@@ -1070,5 +1166,22 @@ namespace msgpack {
         return unpack<UnpackableObject>(data.data(), data.size(), ec);
     }
 }
+
+#define MSGPACK_DEFINE(args...) \
+    template<class T> \
+    void pack(T &packer) \
+    { \
+        packer(args); \
+    } \
+    std::vector<uint8_t> to_msg_pack() \
+    { \
+        return msgpack::pack(*this); \
+    } \
+    template<class T> \
+    static std::tuple<T, std::string> from_msg_pack(const std::vector<uint8_t> &data) \
+    { \
+        std::error_code ec; \
+        return std::tuple<T, std::string>(msgpack::unpack<T>(data, ec), ec.message()); \
+    }
 
 #endif // CPPACK_PACKER_HPP

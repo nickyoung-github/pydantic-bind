@@ -2,7 +2,7 @@ from dataclasses import dataclass as orig_dataclass, is_dataclass
 from enum import Enum, EnumType
 from functools import cache, wraps
 from importlib import import_module
-from pydantic import BaseModel as BaseModel, ConfigDict, computed_field
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict, computed_field
 from pydantic.fields import ComputedFieldInfo, FieldInfo
 from pydantic.json_schema import GenerateJsonSchema
 from pydantic._internal._config import ConfigWrapper
@@ -13,27 +13,24 @@ from pydantic._internal._utils import ClassAttribute
 from pydantic_core import PydanticUndefined
 import sys
 from types import UnionType
-from typing import Any, Dict, List, Type, Optional, Union, cast, get_args, get_origin
+from typing import Any, Dict, List, Optional, Sequence, Type, Union, cast, get_args, get_origin
 
 
 class UnconvertableValue(Exception):
     pass
 
 
-class __IBaseModelNoCopy:
-    pass
-
-
-def field_info_iter(model_class: ModelMetaclass):
+def field_info_iter(model_class):
     if is_dataclass(model_class):
         for field_name, field in model_class.__dataclass_fields__.items():
             yield field_name, field.type, field.default
-    elif issubclass(model_class, BaseModelNoCopy):
-        for field_name, field in model_class.__pydantic_decorators__.computed_fields.items():
-            yield field_name, field.info.return_type, field.info.default
-    else:
-        for field_name, field in model_class.model_fields.items():
-            yield field_name, field.annotation, field.default
+    elif issubclass(model_class, PydanticBaseModel):
+        if hasattr(model_class, "__has_pybind_impl__"):
+            for field_name, field in model_class.__pydantic_decorators__.computed_fields.items():
+                yield field_name, field.info.return_type, field.info.default
+            else:
+                for field_name, field in model_class.model_fields.items():
+                    yield field_name, field.annotation, field.default
 
 
 @cache
@@ -69,41 +66,45 @@ def get_pybind_value(obj):
 def _get_pybind_value(obj, default_to_self: bool = True):
     if isinstance(obj, Enum):
         return get_pybind_type(type(obj)).__entries[obj.name][0]
-    elif is_dataclass(obj):
-        return get_pybind_type(type(obj))(**{name: _get_pybind_value(getattr(obj, name))
-                                             for name in obj.__dataclass_fields__.keys()})
-    elif isinstance(obj, __IBaseModelNoCopy):
-        return get_pybind_type(type(obj))(**{name: _get_pybind_value(getattr(obj, name))
-                                             for name in obj.model_computed_fields.keys()})
-    elif isinstance(obj, BaseModel):
-        return get_pybind_type(type(obj))(**{name: _get_pybind_value(getattr(obj, name))
-                                             for name in obj.model_fields.keys()})
+    elif is_dataclass(obj) or isinstance(obj, PydanticBaseModel):
+        typ = type(obj)
+        pybind_type = get_pybind_type(typ)
+        name_iter = (name for name, _, _ in field_info_iter(typ))
+
+        if hasattr(typ, "__has_pybind_impl__"):
+            return pybind_type(**{name: getattr(obj.pybind_impl, name) for name in name_iter})
+        else:
+            return pybind_type(**{name: _get_pybind_value(getattr(obj, name)) for name in name_iter})
     elif default_to_self:
         return obj
     else:
-        raise UnconvertableValue("Only dataclasses and pydantic classes supported")
+        raise UnconvertableValue("Only builtins, dataclasses and pydantic classes supported")
 
 
 def from_pybind_value(value, typ: Type):
     origin = get_origin(typ)
     args = get_args(typ)
-    is_dc = is_dataclass(typ)
 
     if origin is Optional:
         typ = args[0]
-    elif origin in (Union, UnionType):
+        args = get_args(typ)
+
+    if origin in (Union, UnionType):
         typ = next(a for a in args if a.__name__ == type(value).__name__)
+
+    is_dc_or_pydantic = is_dataclass(typ) or issubclass(typ, PydanticBaseModel)
 
     if issubclass(typ, Enum):
         return typ[value.name]
-    elif issubclass(typ, __IBaseModelNoCopy) or (is_dc and hasattr(typ, "__no_copy__")):
-        return typ(__pybind_impl__=value)
-    elif is_dc or issubclass(typ, BaseModel):
-        # This is quite inefficient
-        kwargs = {}
-        for field_name, field_type, _ in field_info_iter(typ):
-            kwargs[field_name] = from_pybind_value(getattr(value, field_name), field_type)
-        return typ(**kwargs)
+    elif is_dc_or_pydantic:
+        if hasattr(typ, "__has_pybind_impl__"):
+            return typ(__pybind_impl__=value)
+        else:
+            # This is quite inefficient
+            kwargs = {}
+            for field_name, field_type, _ in field_info_iter(typ):
+                kwargs[field_name] = from_pybind_value(getattr(value, field_name), field_type)
+            return typ(**kwargs)
     else:
         return value
 
@@ -194,6 +195,7 @@ class ModelMetaclassNoCopy(ModelMetaclass):
                 namespace[name] = prop
 
         cls = cast(ModelMetaclass, super().__new__(mcs, cls_name, bases, namespace, **kwargs))
+        cls.__has_pybind_impl__ = True
         cls.__pydantic_decorators__.__annotations__["computed_fields"] = dict[str, Decorator[PropertyFieldInfo]]
         cls.__signature__ = ClassAttribute(
             '__signature__', generate_model_signature(cls.__init__, field_infos, config_wrapper)
@@ -226,7 +228,13 @@ def json_schema_extra(schema: Dict[str, Any], model_class: ModelMetaclassNoCopy)
         properties[alias] = field_schema
 
 
-class BaseModelNoCopy(BaseModel, __IBaseModelNoCopy, metaclass=ModelMetaclassNoCopy):
+def _from_msg_pack(cls, data: Sequence[int]):
+    typ = get_pybind_type(cls)
+    pybind_impl, _error_code = typ.from_msg_pack(data)
+    return cls(__pybind_impl__=pybind_impl)
+
+
+class BaseModel(PydanticBaseModel, metaclass=ModelMetaclassNoCopy):
     model_config = ConfigDict(json_schema_extra=json_schema_extra)
 
     @property
@@ -237,9 +245,14 @@ class BaseModelNoCopy(BaseModel, __IBaseModelNoCopy, metaclass=ModelMetaclassNoC
     def pybind_impl(self):
         return self.__pybind_impl
 
-    def __init__(self, **kwargs):
-        super().__init__()
+    def to_msg_pack(self):
+        return self.__pybind_impl.to_msg_pack()
 
+    @classmethod
+    def from_msg_pack(cls, data: Sequence[int]):
+        return _from_msg_pack(cls, data)
+
+    def __init__(self, **kwargs):
         __pybind_impl__ = kwargs.pop("__pybind_impl__", None)
         if __pybind_impl__:
             self.__pybind_impl = __pybind_impl__
@@ -266,17 +279,43 @@ class BaseModelNoCopy(BaseModel, __IBaseModelNoCopy, metaclass=ModelMetaclassNoC
                 raise RuntimeError(f"Missing required fields: {missing_required}")
 
             pybind_type = get_pybind_type(type(self))
-            self.__pybind_impl = pybind_type(**kwargs)
+            object.__setattr__(self, "_BaseModel__pybind_impl", pybind_type(**kwargs))
+
+        super().__init__()
+
+    @property
+    def __dict__(self):
+        return {name: from_pybind_value(getattr(self, name), typ) for name, typ, _ in field_info_iter(type(self))}
+
+    @__dict__.setter
+    def __dict__(self, value: dict):
+        try:
+            object.__getattribute__(self, "_BaseModel__pybind_impl")
+            for name, value in value.items():
+                object.__setattr__(self, name, value)
+        except AttributeError:
+            self.__init__(**value)
 
 
 def __dataclass_init(init):
     @wraps(init)
     def wrapper(self, *args, __pybind_impl__=None, **kwargs):
-        self.pybind_impl = __pybind_impl__ or get_pybind_type(type(self))()
-        init(self, *args, **kwargs)
-        arse = True
+        if __pybind_impl__:
+            self.__pybind_impl = __pybind_impl__
+        else:
+            self.__pybind_impl = get_pybind_type(type(self))()
+            init(self, *args, **kwargs)
 
     return wrapper
+
+
+def to_msg_pack(self):
+    return self.pybind_impl.to_msg_pack()
+
+
+@classmethod
+def from_msg_pack(cls, data: Sequence[int]):
+    return _from_msg_pack(cls, data)
 
 
 def dataclass(cls=None, /, *, init=True, repr=True, eq=True, order=False,
@@ -290,6 +329,10 @@ def dataclass(cls=None, /, *, init=True, repr=True, eq=True, order=False,
         setattr(cls, name, property(fget=_getter(name, field.type), fset=_setter(name, field.type)))
 
     ret.__init__ = __dataclass_init(ret.__init__)
-    ret.__no_copy__ = True
+    ret.__has_pybind_impl__ = True
+
+    ret.to_msg_pack = to_msg_pack
+    ret.from_msg_pack = from_msg_pack
+    ret.pybind_impl = property(fget=lambda self: self.__pybind_impl)
 
     return ret
