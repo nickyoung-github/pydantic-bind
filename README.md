@@ -22,7 +22,7 @@ Add a module this way and it will be scanned for:
 - classes derived from pydantic's BaseModel
 - enums
 
-For any of these which are encountered, a definition will be added to a .h file, with relative path matching the module
+For any of these which are encountered, a definition will be added to a .h file, with re˚lative path matching the module
 and [pybind11](https://pybind11.readthedocs.io/en/stable/index.html) code for binding objects added to a
 corresponding .cpp file.
 
@@ -66,7 +66,7 @@ You can create an instance of the pybind class from your original using `get_pyb
     generated = get_pybind_value(orig)
 
 
-# Why Not Protobufs?
+## Why Not Protobufs?
 
 A very good question. Protobufs are frankly a PITA to use: they have poor to no variant support, the generated
 code is ugly and idiosyncratic, they're large and painful to copy around etc.
