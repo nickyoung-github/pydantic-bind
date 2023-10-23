@@ -7,7 +7,8 @@
 4. [Supported Types](#Supported-Types)
 5. [Inheritance](#Inheritance)
 6. [Msgpack](#Msgpack)
-7. [Generated Code](#Generated-Code)
+7. [Namespaces](#Namespaces)
+8. [Generated Code](#Generated-Code)
 
 
 ## Overview
@@ -32,6 +33,8 @@ Protobuf-generated python classes.
 
 Note that the typcal python developer experience is now somewhat changed, in that it's necessary to build/install
 the project. I personally use JetBrains CLion, in place of PyCharm for such projects.
+
+For an example project please see (the rather nascent) [fin-data-model](https://github.com/nickyoung-github/fin-data-model)
 
 You can create an instance of the pybind class from your original using `get_pybind_instance()`, e.g.,
 
@@ -65,6 +68,8 @@ You can create an instance of the pybind class from your original using `get_pyb
     orig = MyClass(my_int=123, my_string="hello")
     generated = get_pybind_value(orig)
 
+    print(f"my_int: {orig.my_int}, {generated.my_int}")
+
 
 ## Why Not Protobufs?
 
@@ -93,7 +98,7 @@ that access __dict__) less efficient. I've also plumbed the computed fields into
 be used with [FastAPI](https://fastapi.tiangolo.com).
 
 `dataclass` works similarly, adding properties to the dataclass, so that the exisitng get and set functionality works
-seamless in accessing the generated pybind class (also set via a shimmed `init`).
+seamless in accessing the generated pybind class (also set via a shimmed `__init__`).
 
 Using regular `dataclass` or `BaseModel` as members of classes defined with the pydantic_bind versions is very
 inefficient and not recommended.
@@ -137,6 +142,16 @@ project with my rather rudimentary cmake skillz!) Changes include:
 
 A likely future enhancement will be to use [cereal](https://github.com/USCiLab/cereal) and add a mgspack adaptor.
 However, I haven't quite worked out how to do that yet.
+
+
+## Namespaces
+
+Currently, the generated C++ code uses a single namespace, corresponding to the top-level package name in python.
+I intend to introduce namespaces which match the python package structure. However, there are likely to be some
+cmake-related foibles, such as not allowing duplicate module names, even if they are in different packages.
+
+pybind modules are also generated per-module, rather than per-package. This is something I am considering changing,
+but again, some cmake gymnastics will be required.
 
 
 ## Generated Code
