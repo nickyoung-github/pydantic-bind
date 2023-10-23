@@ -44,7 +44,7 @@ def cpp_default(value: Any) -> str | None:
     elif isinstance(value, str):
         return f'"{value}"'
     elif isinstance(value, Enum):
-        return f"{type(value).__name__}::value.name"
+        return f"{type(value).__name__}::{value.name}"
     elif isinstance(value, (int, float)):
         return str(value)
     elif isinstance(value, (list, set, tuple)):
