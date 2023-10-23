@@ -44,7 +44,7 @@ def cpp_default(value: Any) -> str | None:
     elif isinstance(value, str):
         return f'"{value}"'
     elif isinstance(value, Enum):
-        return value.name
+        return f"{type(value).__name__}::value.name"
     elif isinstance(value, (int, float)):
         return str(value)
     elif isinstance(value, (list, set, tuple)):
@@ -262,7 +262,7 @@ def generate_enum(enum_typ: EnumType, indent_size: int = 0, max_width: int = 110
     args_wrapper = TextWrapper(break_long_words=False, subsequent_indent=args_indent, width=max_width)
 
     items = (f"{i.name} = {i.value}" for i in enum_typ)
-    enum_def = "\n".join(args_wrapper.wrap(f"""{indent}enum {name} {{ {', '.join(items)} }};"""))
+    enum_def = "\n".join(args_wrapper.wrap(f"""{indent}enum class {name} {{ {', '.join(items)} }};"""))
 
     pydantic_items = (f'.value("{i.name}", {name}::{i.name})' for i in enum_typ)
     pydantic_def = f'{indent}py::enum_<{name}>(m, "{name}")'

@@ -234,7 +234,7 @@ namespace msgpack {
 
         template<class T>
         void pack_enum(const T& value) {
-            pack_type(static_cast<const uint16_t&>(value));
+            pack_type(static_cast<const uint16_t>(value));
         }
 
         template<class T>
