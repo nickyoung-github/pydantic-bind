@@ -36,3 +36,11 @@ function(pydantic_bind_add_module)
     install(FILES "${target_header}" DESTINATION "${PROJECT_SOURCE_DIR}/include/${header_root}")
     install(TARGETS ${target_name} DESTINATION ${pybind_dir})
 endfunction()
+
+
+function(pydantic_bind_add_package)
+    file(GLOB_RECURSE modules ARGN *.py)
+    foreach(module in ${modules})
+        pydantic_bind_add_module(${module})
+    endforeach ()
+endfunction()
