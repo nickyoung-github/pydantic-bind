@@ -240,7 +240,7 @@ def generate_class(model_class: ModelMetaclass, indent_size: int = 0, max_width:
 
     {indent}{newline_indent.join(struct_members)}
     
-    {indent}MSGPACK_DEFINE({', '.join(names)});
+    {indent}MSGPACK_DEFINE({newline.join(args_wrapper.wrap(', '.join(names)))});
 {indent}}};"""
 
     pydantic_bases = ", " + ", ".join(base.__name__ for base in base_init.keys()) if base_init else ""
