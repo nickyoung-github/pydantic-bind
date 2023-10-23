@@ -6,7 +6,7 @@ with open("README.md", "r") as fh:
     long_description = fh.read()
 
 setup(name="pydantic_bind",
-      version="1.0.4",
+      version="1.0.5",
       description="C++/pybind generation from Pydantic classes",
       author="Nick Young",
       license=r"https://www.apache.org/licenses/LICENSE-2.0",
