@@ -286,10 +286,12 @@ def generate_module(module_name: str, output_dir: str, indent_size: int = 4, max
 
     module = import_module(module_name)
     generated_root = Path(output_dir)
+    module_root = module.__name__.split('.')[-0]
     module_base_name = module.__name__.split('.')[-1]
     self_include = f'"{module_name.replace(dot, slash)}.h"'
+    include_root = "/".join(module_name.split(".")[:-1])
     qualified_module_name = "_".join(module.__name__.split('.')[:-1]) + "_" + module_base_name
-    namespace = '::'.join(module_name.split('.')[:-1])
+    namespace = "::".join(module_name.split(".")[:-1])
     guard = f"{namespace.upper().replace('::', '_')}_{module_base_name.upper()}_H"
 
     if not generated_root.exists():
@@ -315,12 +317,13 @@ def generate_module(module_name: str, output_dir: str, indent_size: int = 4, max
                 includes = includes.union(struct_includes)
                 usings = usings.union(struct_usings)
 
-
     imports = []
-    for include in (i for i in includes if namespace in i):
+    for include in (i for i in includes if i.startswith('"' + module_root) and include_root not in i):
         import_parts = include.split(slash)
         import_parts.insert(-1, "__pybind__")
-        imprt = '.'.join(import_parts).replace('#include ', '').replace('.h', '')
+        import_qualifier = "_".join(import_parts[:-2]).strip('"')
+        import_parts[-1] = import_qualifier + "_" + import_parts[-1].replace(".h", "")
+        imprt = ".".join(import_parts)
         imports.append(f"{indent}py::module_::import({imprt});")
 
     includes = [f"#include {i}" for i in
