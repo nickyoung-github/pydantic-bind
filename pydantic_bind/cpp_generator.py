@@ -56,8 +56,8 @@ def cpp_default(value: Any) -> str | None:
         raise RuntimeError(f"Unsupported default value {value}")
 
 
-def cpp_type(typ) -> Tuple[str, Set[str]]:
-    def args_type(base_type: str) -> Tuple[str, Set[str]]:
+def cpp_type(typ) -> Tuple[str, Set[str], Set[str]]:
+    def args_type(base_type: str) -> Tuple[str, Set[str], Set[str]]:
         optional = False
         real_args = ()
 
@@ -68,24 +68,26 @@ def cpp_type(typ) -> Tuple[str, Set[str]]:
                 real_args += (arg,)
 
         arg_types = ()
+        all_arg_usings = set()
         all_arg_includes = {f"<{base_type.replace('std::', '')}>"}
         if optional:
             all_arg_includes.add("<optional>")
 
         for arg in real_args:
-            arg_type, arg_includes = cpp_type(arg)
+            arg_type, arg_includes, arg_usings = cpp_type(arg)
             arg_types += (arg_type,)
             all_arg_includes.update(arg_includes)
+            all_arg_usings.update(arg_usings)
 
         args_cpp_type = arg_types[0] if len(arg_types) == 1 else f"{base_type}<{', '.join(arg_types)}>"
 
-        return f"std::optional<{args_cpp_type}>" if optional else args_cpp_type, all_arg_includes
+        return f"std::optional<{args_cpp_type}>" if optional else args_cpp_type, all_arg_includes, all_arg_usings
 
     dot = r'.'
     slash = r'/'
     base_cpp_type, include = __base_type_mappings.get(typ, (None, None))
     if base_cpp_type:
-        return base_cpp_type, {include} if include else {}
+        return base_cpp_type, {include} if include else set(), set()
     else:
         origin = get_origin(typ)
         args = get_args(typ)
@@ -97,37 +99,38 @@ def cpp_type(typ) -> Tuple[str, Set[str]]:
                 else:
                     raise RuntimeError(f"Cannot use non parameterised collection {typ} as a type")
             elif issubclass(typ, PydanticBaseModel) or is_dataclass(typ) or issubclass(typ, Enum):
-                return typ.__name__, {f'"{typ.__module__.replace(dot, slash)}.h"'}
+                using = "::".join(chain(typ.__module__.split('.')[:-1], (typ.__name__,)))
+                return typ.__name__, {f'"{typ.__module__.replace(dot, slash)}.h"'}, {using}
             else:
                 raise RuntimeError(f"Can only use builtins, datetime or BaseModel-derived types, not {typ}")
 
         if origin is Optional:
-            cpp_typ, includes = cpp_type(args[0])
-            return f"std::optional<{cpp_typ}>", includes.union(("optional",))
+            cpp_typ, includes, usings = cpp_type(args[0])
+            return f"std::optional<{cpp_typ}>", includes.union(("optional",)), usings
         elif origin in (Union, UnionType):
             return args_type("std::variant")
         elif origin in (list, Sequence):
-            cpp_typ, includes = cpp_type(args[0])
-            return f"std::vector<{cpp_typ}>", includes.union(("vector",))
+            cpp_typ, includes, usings = cpp_type(args[0])
+            return f"std::vector<{cpp_typ}>", includes.union(("vector",)), usings
         elif origin is set:
-            cpp_typ, includes = cpp_type(args[0])
-            return f"std::set<{cpp_typ}>", includes.union(("set",))
+            cpp_typ, includes, usings = cpp_type(args[0])
+            return f"std::set<{cpp_typ}>", includes.union(("set",)), usings
         elif origin is tuple:
             if Ellipsis in args:
                 if len(args) != 2 or args[1] is not Ellipsis:
                     raise RuntimeError("Cannot support Ellipsis/Any as a tuple parameter type")
 
                 # We've got something like Tuple[int, ...], treat it as a vector
-                cpp_typ, includes = cpp_type(args[0])
-                return f"std::vector<{cpp_typ}>", includes.union(("vector",))
+                cpp_typ, includes, usings = cpp_type(args[0])
+                return f"std::vector<{cpp_typ}>", includes.union(("vector",)), usings
             else:
                 # An actual tuple
                 return args_type("std::tuple")
         elif origin in (dict, Mapping):
-            key_type, key_includes = cpp_type(args[0])
-            value_type, value_includes = cpp_type(args[0])
+            key_type, key_includes, key_usings = cpp_type(args[0])
+            value_type, value_includes, value_usings = cpp_type(args[0])
             return f"std::unordered_map<{key_type}, {value_type}>", \
-                key_includes.union(value_includes).union("unordered_map", )
+                key_includes.union(value_includes).union("unordered_map", ), key_usings.union(value_usings)
         else:
             raise RuntimeError(f"Cannot handle type {typ}")
 
@@ -145,7 +148,8 @@ def class_attrs(model_class: ModelMetaclass):
     frozen = model_class.__dataclass_params__.frozen if is_dataclass(model_class) else \
         model_class.model_config.get("frozen")
     pydantic_def = ".def_readonly" if frozen else ".def_readwrite"
-    all_includes = {"<msgpack/msgpack.h>"}
+    all_includes = {'"msgpack/msgpack.h"'}
+    all_usings = set()
     bases = [b for b in model_class.__bases__
              if b not in (BaseModel, PydanticBaseModel) and issubclass(b, BaseModel)
              and b.__pydantic_decorators__.computed_fields]
@@ -153,12 +157,13 @@ def class_attrs(model_class: ModelMetaclass):
     needs_default_constructor = False
 
     for name, field_type, default in field_info_iter(model_class):
-        typ, includes = cpp_type(field_type)
+        typ, includes, usings = cpp_type(field_type)
         all_includes.update(includes)
+        all_usings.update(usings)
 
         try:
             move = field_type not in __no_move_types and not issubclass(field_type, Enum)
-        except TypeError as e:
+        except TypeError:
             move = False
 
         default = cpp_default(default)
@@ -183,17 +188,17 @@ def class_attrs(model_class: ModelMetaclass):
 
     base_init = {b: class_attrs(b)[0] for b in bases}
     return names, constructor_args, init_args, default_init_args if needs_default_constructor else [], base_init, \
-        types, kwargs, struct_members, pydantic_attrs, all_includes
+        types, kwargs, struct_members, pydantic_attrs, all_includes, all_usings
 
 
 def generate_class(model_class: ModelMetaclass, indent_size: int = 0, max_width: int = 110) -> \
-        Tuple[Optional[str], Optional[str], Optional[Tuple[str, ...]]]:
+        Tuple[Optional[str], Optional[str], Optional[Set[str]], Optional[Set[str]]]:
 
     names, constructor_args, init_args, default_init_args, base_init, types, kwargs, struct_members, pydantic_attrs, \
-        all_includes = class_attrs(model_class)
+        all_includes, all_usings = class_attrs(model_class)
 
     if not types:
-        return None, None, None
+        return None, None, None, None
 
     cls_name = model_class.__name__
     bases = f" : public {', '.join(b.__name__ for b in base_init.keys())}" if base_init else ""
@@ -251,7 +256,7 @@ def generate_class(model_class: ModelMetaclass, indent_size: int = 0, max_width:
     {indent}.def_static("from_msg_pack", &{cls_name}::from_msg_pack<{cls_name}>)
     {indent}{newline_indent.join(pydantic_attrs)};"""
 
-    return struct_def, pydantic_def, tuple(f"#include {i}" for i in sorted(all_includes))
+    return struct_def, pydantic_def, all_includes, all_usings
 
 
 def generate_enum(enum_typ: EnumType, indent_size: int = 0, max_width: int = 110) -> Tuple[str, str]:
@@ -272,23 +277,28 @@ def generate_enum(enum_typ: EnumType, indent_size: int = 0, max_width: int = 110
 
 
 def generate_module(module_name: str, output_dir: str, indent_size: int = 4, max_width: int = 110):
-    single_newline = "\n"
-    double_newline = "\n\n"
     dot = r"."
     slash = r"/"
     indent = " " * indent_size
+    single_newline = "\n"
+    double_newline = "\n\n"
+    newline_indent = f"{single_newline}{indent}"
 
     module = import_module(module_name)
     generated_root = Path(output_dir)
-    self_include = f'#include "{module_name.replace(dot, slash)}.h"'
+    module_root = module.__name__.split('.')[-0]
     module_base_name = module.__name__.split('.')[-1]
-    namespace = module.__name__.split('.')[0]
-    guard = f"{namespace.upper()}_{module_base_name.upper()}_H"
+    self_include = f'"{module_name.replace(dot, slash)}.h"'
+    include_root = "/".join(module_name.split(".")[:-1])
+    qualified_module_name = "_".join(module.__name__.split('.')[:-1]) + "_" + module_base_name
+    namespace = "::".join(module_name.split(".")[:-1])
+    guard = f"{namespace.upper().replace('::', '_')}_{module_base_name.upper()}_H"
 
     if not generated_root.exists():
         generated_root.mkdir(parents=True, exist_ok=True)
 
     includes = set()
+    usings = set()
     struct_defs = []
     pydantic_defs = []
     enum_defs = []
@@ -299,25 +309,33 @@ def generate_module(module_name: str, output_dir: str, indent_size: int = 4, max
             enum_defs.append(enum_def)
             pydantic_defs.append(pydantic_def)
         elif is_dataclass(clz) or issubclass(clz, BaseModel):
-            struct_def, pydantic_def, struct_includes = generate_class(clz, indent_size, max_width=max_width)
+            struct_def, pydantic_def, struct_includes, struct_usings = \
+                generate_class(clz, indent_size, max_width=max_width)
             if struct_def:
                 struct_defs.append(struct_def)
                 pydantic_defs.append(pydantic_def)
                 includes = includes.union(struct_includes)
-
-                if self_include in includes:
-                    includes.remove(self_include)
+                usings = usings.union(struct_usings)
 
     imports = []
-    for include in (i for i in includes if namespace in i):
+    for include in (i for i in includes if i.startswith('"' + module_root) and include_root not in i):
         import_parts = include.split(slash)
         import_parts.insert(-1, "__pybind__")
-        imprt = '.'.join(import_parts).replace('#include ', '').replace('.h', '')
+        import_qualifier = "_".join(import_parts[:-2]).strip('"')
+        import_parts[-1] = import_qualifier + "_" + import_parts[-1].replace(".h", "")
+        imprt = ".".join(import_parts)
         imports.append(f"{indent}py::module_::import({imprt});")
+
+    includes = [f"#include {i}" for i in
+                chain(sorted(i for i in includes if not i.endswith('.h"')),
+                      sorted(i for i in includes if i.endswith('.h"') and i != self_include))]
+
+    usings = [f"using {u};" for u in sorted(usings) if "::".join(u.split("::")[:-1]) != namespace]
 
     enum_contents = f"\n{double_newline.join(enum_defs)}{single_newline if struct_defs else ''}" if enum_defs else ""
     struct_contents = f"\n{double_newline.join(struct_defs)}" if struct_defs else ""
     include_contents = f"\n{single_newline.join(includes)}\n" if includes else ""
+    using_contents = f"\n{indent}{newline_indent.join(usings)}\n" if includes else ""
     import_contents = f"\n{single_newline.join(imports)}\n" if imports else ""
 
     header_contents = f"""
@@ -325,7 +343,7 @@ def generate_module(module_name: str, output_dir: str, indent_size: int = 4, max
 #define {guard}
 {include_contents}
 namespace {namespace}
-{{{enum_contents}{struct_contents}
+{{{using_contents}{enum_contents}{struct_contents}
 }} // {namespace}
 
 #endif // {guard}
@@ -342,7 +360,7 @@ namespace py = pybind11;
 using namespace {namespace};
 
 
-PYBIND11_MODULE({module_base_name}, m)
+PYBIND11_MODULE({qualified_module_name}, m)
 {{{import_contents}
 {double_newline.join(pydantic_defs)}
 }}
