@@ -2,41 +2,58 @@
 
 # Table of Contents
 1. [Overview](#Overview)
-2. [Why Not Protobufs ?](#Why-Not-Protobufs)
-3. [No Copy](#No-Copy)
-4. [Supported Types](#Supported-Types)
-5. [Inheritance](#Inheritance)
-6. [Msgpack](#Msgpack)
-7. [Namespaces](#Namespaces)
-8. [Generated Code](#Generated-Code)
+2. [Getting Started](#Getting-Started)
+3. [Why Not Protobufs ?](#Why-Not-Protobufs)
+4. [No Copy](#No-Copy)
+5. [Supported Types](#Supported-Types)
+6. [Inheritance](#Inheritance)
+7. [Msgpack](#Msgpack)
+8. [Namespaces](#Namespaces)
+9. [Generated Code](#Generated-Code)
+10. [Other Languages](#Other-Languages)
 
 
 ## Overview
 
-This project has helpers for automatically generating C++ structs and corresponding pybind marshalling code for 
-dataclasses and pydantic-based classes.
+Python is the language of choice for  finance, data science etc. Python calling C++ (and increasingly, Rust) is a
+common pattern, leveraging packages such as
+[pybind11](https://pybind11.readthedocs.io/en/stable/index.html) .
 
-This is achieved via a cmake rule: `pydantic_bind_add_module(<path to module>)`
+A common problem is a how best to represent data to be shared between python and C++ code. One would like idiomatic
+representations in each language and this may be necessary to fully utilise certain python packages. E.g.,
+[FastAPI](https://fastapi.tiangolo.com) is a popular way to create REST services, using Open API definitions derived
+from [pydantic](https://docs.pydantic.dev/latest/) classes. Therefore, a data model authored using pydantic classes,
+or native python dataclasses, from which sensible C++ structs and appropriate marshalling can automatically be
+generated, is desirable.
 
-Add a module this way and it will be scanned for:
-- dataclasses
-- classes derived from pydantic's BaseModel
-- enums
+This package provides such tools: a cmake rule allows you to generate C++ structs (with msgpack serialisation) and
+corresponding pybind11 bindings.
 
-For any of these which are encountered, a definition will be added to a .h file, with re˚lative path matching the module
-and [pybind11](https://pybind11.readthedocs.io/en/stable/index.html) code for binding objects added to a
-corresponding .cpp file.
-
-The intended use of this package is for defining behaviour-less data classes, to be shared between python and C++. E.g.,
-a common object model for financial modelling. Furthr, we want idiomatic classes for each language, not mutants like
-Protobuf-generated python classes.
+Python functions allow you to naviagte between the C++ pybind11 objects and the native python objects. There is also an
+option for all python operations to be directed to an owned pybind11 object (see [No Copy](#No-Copy)).
 
 Note that the typcal python developer experience is now somewhat changed, in that it's necessary to build/install
 the project. I personally use JetBrains CLion, in place of PyCharm for such projects.
 
-For an example project please see (the rather nascent) [fin-data-model](https://github.com/nickyoung-github/fin-data-model)
+For an example of the kind of behaviour-less object model this package is intended to help,
+please see (the rather nascent) [fin-data-model](https://github.com/nickyoung-github/fin-data-model)
 
-You can create an instance of the pybind class from your original using `get_pybind_instance()`, e.g.,
+
+## Getting Started
+
+`pydantic_bind` adds a custom cmake rule: `pydantic_bind_add_package(<package path>)`
+
+This rule will do the following:
+- scan for sub-packages
+- scan each sub-package for all .py files
+- add custom steps for generating .cpp/.h files from any of the following, encounted in the .py files:
+  - dataclasses
+  - classes derived from pydantic's BaseModel
+  - enums
+
+C++ directory and namespace structure will match the python package structure (see [Namespaces](#Namespaces)).
+
+You can create an instance of the pybind11 class from your original using `get_pybind_instance()`, e.g.,
 
 *my_class.py:*
 
@@ -57,13 +74,13 @@ You can create an instance of the pybind class from your original using `get_pyb
     find_package(python3 REQUIRED COMPONENTS Interpreter Development)
     find_package(pydantic_bind REQUIRED COMPONENTS HINTS "${python3_SITELIB}")
     
-    pydantic_bind_add_module(my_class.py)
+    pydantic_bind_add_package(my_package)
 
 
 *my_util.py*
 
     from pydantic_bind import get_pybind_value
-    from my_class imnport MyClass
+    from my_package.my_class imnport MyClass
 
     orig = MyClass(my_int=123, my_string="hello")
     generated = get_pybind_value(orig)
@@ -73,8 +90,8 @@ You can create an instance of the pybind class from your original using `get_pyb
 
 ## Why Not Protobufs?
 
-A very good question. Protobufs are frankly a PITA to use: they have poor to no variant support, the generated
-code is ugly and idiosyncratic, they're large and painful to copy around etc.
+I personally find protobufs to be a PITA to use: they have poor to no variant support, the generated code is ugly and
+idiosyncratic, they're large and painful to copy around etc.
 
 AVRO is more friendly but generates python classes dynamically, which confuses IDEs like Pycharm. I do think a good
 solution is something like [pydantic_avro](https://github.com/godatadriven/pydantic-avro/tree/main/src/pydantic_avro)
@@ -93,12 +110,12 @@ than holding its own copy.
 
 Deriving from this `BaseModel` will give you equivalent functionality of as pydantic's `BaseModel`. The
 annotations are re-written using `computed_field`, with property getters and setters operating on the generated pybind
-class, which is instantiated behind the scenes in `init`. Note that this will make some operations (especially those
+class, which is instantiated behind the scenes in `__init__`. Note that this will make some operations (especially those
 that access __dict__) less efficient. I've also plumbed the computed fields into the JSON schema, so these objects can
 be used with [FastAPI](https://fastapi.tiangolo.com).
 
 `dataclass` works similarly, adding properties to the dataclass, so that the exisitng get and set functionality works
-seamless in accessing the generated pybind class (also set via a shimmed `__init__`).
+seamless in accessing the generated pybind11 class (also set via a shimmed `__init__`).
 
 Using regular `dataclass` or `BaseModel` as members of classes defined with the pydantic_bind versions is very
 inefficient and not recommended.
@@ -120,7 +137,8 @@ The following python -> C++ mappings are supported (there are likely others I sh
 - pydantic_bind.BaseModel --> struct
 - dataclass --> struct
 - pydantic_bind.dataclass --> struct
-- Enum --> enum
+- Enum --> enum class
+
 
 ## Inheritance
 
@@ -141,17 +159,17 @@ project with my rather rudimentary cmake skillz!) Changes include:
 - Support for enums
 
 A likely future enhancement will be to use [cereal](https://github.com/USCiLab/cereal) and add a mgspack adaptor.
-However, I haven't quite worked out how to do that yet.
+
+The no-copy python objects add `to_msg_pack()` and `from_msg_pack()` (the latter being a class method), to access
+this functionality.
 
 
 ## Namespaces
 
-Currently, the generated C++ code uses a single namespace, corresponding to the top-level package name in python.
-I intend to introduce namespaces which match the python package structure. However, there are likely to be some
-cmake-related foibles, such as not allowing duplicate module names, even if they are in different packages.
+Directory structure and namespaces in the generated C++ match the python package and module names.
 
-pybind modules are also generated per-module, rather than per-package. This is something I am considering changing,
-but again, some cmake gymnastics will be required.
+cmake requires unique target names and pybind11 requires that the filename (minus the OS-speicific qualifiers) matches
+the module name. 
 
 
 ## Generated Code
@@ -160,7 +178,7 @@ Code is generated into a directory structure underneath `<top level>/generated`.
 
 Headers are installed to `<top level>/include`.
 
-Compiled pybind modules are installed into `<original module path>/__pybind__`.
+Compiled pybind11 modules are installed into `<original module path>/__pybind__`.
 
 For C++ usage, you need only the headers, the compiled code is for pybind/python usage only.
 
@@ -227,7 +245,7 @@ will generate the following files:
     #include <msgpack/msgpack.h>
     #include <chrono>
     
-    namespace common_object_model
+    namespace common_object_model::v1::common
     {
         enum Weekday { MONDAY = 1, TUESDAY = 2, WEDNESDAY = 3, THURSDAY = 4, FRIDAY = 5, SATURDAY = 6, SUNDAY = 7
         };
@@ -320,10 +338,10 @@ will generate the following files:
     #include "foo.h"
     
     namespace py = pybind11;
-    using namespace common_object_model;
+    using namespace common_object_model::v1::common;
     
     
-    PYBIND11_MODULE(foo, m)
+    PYBIND11_MODULE(common_object_model_v1_common_foo, m)
     {
         py::enum_<Weekday>(m, "Weekday").value("MONDAY", Weekday::MONDAY)
             .value("TUESDAY", Weekday::TUESDAY)
@@ -371,5 +389,7 @@ will generate the following files:
     }
 
 
+## Other languages
 
-
+When time allows, I will look at adding support for Rust. There is limited value in generating Java or C# classes;
+calling those VM-based lanagues in-process from python has never worked well, in my experience.

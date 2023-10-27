@@ -1,46 +1,93 @@
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
-find_package(pybind11 REQUIRED)
+find_package(pybind11 REQUIRED HINTS "${Python3_SITELIB}")
 
 include_directories("${Python3_SITELIB}/pydantic_bind/include")
 include_directories("${PROJECT_SOURCE_DIR}/generated")
 
-function(pydantic_bind_add_module)
-    cmake_path(GET ARGN FILENAME target_name)
-    cmake_path(REMOVE_EXTENSION target_name OUTPUT_VARIABLE target_name)
+function(_pydantic_generate_cpp package)
+    string(REPLACE "." "/" package_root ${package})
+    string(REPLACE "." "_" package_name ${package})
 
-    cmake_path(REPLACE_EXTENSION ARGN cpp OUTPUT_VARIABLE target_cpp)
-    cmake_path(REPLACE_EXTENSION target_cpp h OUTPUT_VARIABLE target_header)
-    cmake_path(REMOVE_FILENAME target_header OUTPUT_VARIABLE header_root)
+    cmake_path(APPEND generated_dir ${PROJECT_SOURCE_DIR} "generated" ${package_root})
+    cmake_path(APPEND header_dir ${PROJECT_SOURCE_DIR} "include" ${package_root})
+    cmake_path(APPEND pybind_dir ${PROJECT_SOURCE_DIR} ${package_root} "__pybind__")
 
-    cmake_path(REMOVE_EXTENSION target_cpp OUTPUT_VARIABLE module)
-    string(REPLACE "/" "." module ${module})
+    foreach (module_path ${ARGN})
+        string(REPLACE "${PROJECT_SOURCE_DIR}/" "" module_r_path ${module_path})
 
-    set(target_cpp "${PROJECT_SOURCE_DIR}/generated/${target_cpp}")
-    set(target_header "${PROJECT_SOURCE_DIR}/generated/${target_header}")
-    cmake_path(REMOVE_FILENAME target_cpp OUTPUT_VARIABLE output_dir)
+        cmake_path(REMOVE_EXTENSION module_r_path OUTPUT_VARIABLE module)
+        cmake_path(GET module FILENAME base_name)
+        string(REPLACE "/" "." module ${module})
 
-    string(REPLACE "generated/" "" pybind_dir ${output_dir})
-    set(pybind_dir "${pybind_dir}__pybind__")
+        string(CONCAT target ${package_name} "_" ${base_name})
 
-    add_custom_command(
-            OUTPUT ${target_cpp} ${target_header}
-            DEPENDS ${ARGN}
-            COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH="${PROJECT_SOURCE_DIR}" ${Python3_EXECUTABLE} "${Python3_SITELIB}/pydantic_bind/cpp_generator.py" --module ${module} --output_dir ${output_dir}
-    )
+        cmake_path(APPEND foo ${generated_dir} ${base_name} OUTPUT_VARIABLE cpp)
+        cmake_path(APPEND_STRING cpp ".cpp")
 
-    pybind11_add_module(${target_name} "${target_cpp}" "${target_header}")
+        cmake_path(REPLACE_EXTENSION cpp h OUTPUT_VARIABLE header)
+        install(FILES ${header} DESTINATION ${header_dir})
 
-    target_include_directories(${target_name} INTERFACE "${Python3_SITELIB}/pydantic_bind/include")
+        add_custom_command(
+                OUTPUT ${cpp} ${header}
+                DEPENDS ${module_path}
+                COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH="${PROJECT_SOURCE_DIR}" ${Python3_EXECUTABLE} "${Python3_SITELIB}/pydantic_bind/cpp_generator.py" --module ${module} --output_dir ${generated_dir}
+        )
 
-    install(FILES "${target_header}" DESTINATION "${PROJECT_SOURCE_DIR}/include/${header_root}")
-    install(TARGETS ${target_name} DESTINATION ${pybind_dir})
+        list(APPEND cpps ${cpp})
+        list(APPEND headers ${header})
+        list(APPEND targets ${target})
+        list(APPEND pybind_dirs ${pybind_dir})
+    endforeach()
+
+    set(package_cpps ${cpps} PARENT_SCOPE)
+    set(package_headers ${headers} PARENT_SCOPE)
+    set(package_targets ${targets} PARENT_SCOPE)
+    set(package_pybind_dirs ${pybind_dirs} PARENT_SCOPE)
 endfunction()
 
+function(pydantic_bind_add_package package)
+    string(REPLACE "." "/" package_root ${package})
 
-function(pydantic_bind_add_package)
-    file(GLOB_RECURSE modules ARGN *.py)
-    foreach(module in ${modules})
-        pydantic_bind_add_module(${module})
-    endforeach ()
+    file(GLOB_RECURSE dirs LIST_DIRECTORIES true "${PROJECT_SOURCE_DIR}/${package_root}/INVALID")
+
+    file(GLOB root "${PROJECT_SOURCE_DIR}/${package_root}/*.py")
+    list(FILTER root EXCLUDE REGEX ".*\/__init__.py")
+    list(LENGTH root root_len)
+
+    if (${root_len} GREATER 0)
+        list(APPEND dirs "${PROJECT_SOURCE_DIR}/${package_root}")
+    endif()
+
+    list(FILTER dirs EXCLUDE REGEX ".*\/__pycache__")
+    list(FILTER dirs EXCLUDE REGEX ".*\/__pybind__")
+
+    # First, generate all the cpp files from python
+
+    foreach (dir ${dirs})
+        cmake_path(GET dir FILENAME dir_name)
+        string(REPLACE "${PROJECT_SOURCE_DIR}/" "" sub_package ${dir})
+        string(REPLACE "/" "." sub_package ${sub_package})
+
+        file(GLOB modules ${dir}/*.py)
+        list(FILTER modules EXCLUDE REGEX ".*\/__init__.py")
+        list(LENGTH modules module_len)
+
+        if (${module_len} GREATER 0)
+            _pydantic_generate_cpp(${sub_package} ${modules})
+
+            list(APPEND all_cpps ${package_cpps})
+            list(APPEND all_headers ${package_headers})
+            list(APPEND all_targets ${package_targets})
+            list(APPEND all_pybind_dirs ${package_pybind_dirs})
+        endif()
+    endforeach()
+
+    # Now, create pybind11 targets for each module
+
+    foreach(cpp target pybind_dir IN ZIP_LISTS all_cpps all_targets all_pybind_dirs)
+        pybind11_add_module(${target} ${cpp} ${all_headers})
+        install(TARGETS ${target} DESTINATION ${pybind_dir})
+        target_include_directories(${target} INTERFACE "${Python3_SITELIB}/pydantic_bind/include")
+    endforeach()
 endfunction()

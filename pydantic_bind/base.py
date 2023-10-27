@@ -2,6 +2,7 @@ from dataclasses import dataclass as orig_dataclass, is_dataclass
 from enum import Enum, EnumType
 from functools import cache, wraps
 from importlib import import_module
+from itertools import chain
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, computed_field
 from pydantic.fields import ComputedFieldInfo, FieldInfo
 from pydantic.json_schema import GenerateJsonSchema
@@ -42,9 +43,9 @@ def get_pybind_type(typ: Union[Enum, ModelMetaclass]) -> Union[EnumType, Type]:
     :return: The corresponding, generated pybind type
     """
 
-    module_parts = typ.__module__.split(".")
-    module_parts.insert(-1, "__pybind__")
-    pybind_module = ".".join(module_parts)
+    package_parts = typ.__module__.split(".")
+    pybind_module_name = "_".join(package_parts)
+    pybind_module = ".".join(chain(package_parts[:-1], ["__pybind__", pybind_module_name]))
 
     module = sys.modules.get(pybind_module)
     if not module:
@@ -60,21 +61,21 @@ def get_pybind_value(obj):
     :param obj: A dataclass or Pydantic BaseModel-derived object
     :return: The corresponding pybind object
     """
-    return _get_pybind_value(obj, type(obj), False)
+    return _get_pybind_value(obj, False)
 
 
-def _get_pybind_value(obj, typ: Union[Type, EnumType], default_to_self: bool = True):
-    if issubclass(typ, EnumType):
-        name = obj if isinstance(obj, str) else obj.name
-        return get_pybind_type(type(obj)).__entries[name][0]
+def _get_pybind_value(obj, default_to_self: bool = True):
+    if isinstance(obj, Enum):
+        return get_pybind_type(type(obj)).__entries[obj.name][0]
     elif is_dataclass(obj) or isinstance(obj, PydanticBaseModel):
+        typ = type(obj)
         pybind_type = get_pybind_type(typ)
         name_iter = (name for name, _, _ in field_info_iter(typ))
 
         if hasattr(typ, "__has_pybind_impl__"):
             return pybind_type(**{name: getattr(obj.pybind_impl, name) for name in name_iter})
         else:
-            return pybind_type(**{name: _get_pybind_value(getattr(obj, name), typ) for name in name_iter})
+            return pybind_type(**{name: _get_pybind_value(getattr(obj, name)) for name in name_iter})
     elif default_to_self:
         return obj
     else:
@@ -148,7 +149,7 @@ def _getter(name: str, typ: Union[EnumType, Type]):
 
 def _setter(name: str, typ: Union[EnumType, Type]):
     def fn(self, value: Any):
-        setattr(self.pybind_impl, name, _get_pybind_value(value, typ))
+        setattr(self.pybind_impl, name, _get_pybind_value(value))
 
     fn.__name__ = name
     fn.__annotations__ = {"value": typ}
@@ -172,7 +173,7 @@ class ModelMetaclassNoCopy(ModelMetaclass):
 
         if annotations:
             # Rewrite annotations as properties, with getters and setters which interact with the attributes
-            # on the generated pybind class
+            # on the generated pybind_impl class
 
             properties = {}
 
@@ -257,12 +258,6 @@ class BaseModel(PydanticBaseModel, metaclass=ModelMetaclassNoCopy):
         if __pybind_impl__:
             self.__pybind_impl = __pybind_impl__
         else:
-            # This replicates some of what happens in the pydantic code:
-            # 1. Convert values according to the alias generator
-            # 2. Report missing required values
-            #
-            # Additionally, we convert values to pybind equivalents, where required (enums, for example)
-
             missing_required = []
 
             for name, field_info in self.model_computed_fields.items():
@@ -279,21 +274,19 @@ class BaseModel(PydanticBaseModel, metaclass=ModelMetaclassNoCopy):
                         kwargs[field_info.alias] = value
 
                 if value != PydanticUndefined:
-                    kwargs[name] = _get_pybind_value(value, field_info.return_type)
+                    kwargs[name] = _get_pybind_value(value)
 
             if missing_required:
                 raise RuntimeError(f"Missing required fields: {missing_required}")
-
-            # Now initialise the corresponding pybind type with the converted values ...
 
             pybind_type = get_pybind_type(type(self))
             object.__setattr__(self, "_BaseModel__pybind_impl", pybind_type(**kwargs))
 
         super().__init__()
 
+
     @property
     def __dict__(self):
-        # This is not super efficient, but does ensure that __eq__, __hash__ work, using the pydantic implementations
         return {name: from_pybind_value(getattr(self, name), typ) for name, typ, _ in field_info_iter(type(self))}
 
     @__dict__.setter
