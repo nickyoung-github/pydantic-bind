@@ -7,10 +7,6 @@ import sys
 from typing import Any, Union
 
 
-class UnconvertableValue(Exception):
-    pass
-
-
 @cache
 def get_pybind_type(typ: Union[Enum, type]) -> Union[EnumType, type]:
     """

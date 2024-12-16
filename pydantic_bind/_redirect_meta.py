@@ -4,7 +4,7 @@ from typing import Any
 from ._descriptors import DictDescriptor, FieldDescriptor
 
 
-class RedirectMeta(type):
+class RedirectMeta:
     _FIELD_DESCRIPTOR = FieldDescriptor
     _MISSING = MISSING
 
