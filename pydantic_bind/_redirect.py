@@ -36,15 +36,13 @@ class RedirectDict(dict):
     def __getitem__(self, item):
         owner = self.__owner
         if item in owner.redirect_model_fields():
-            return owner.__redirect_get_value__(item, None)
-            # return owner.__redirect_get_value__(item, object.__getattribute__(type(owner), item).type)
+            return owner.__redirect_get_value__(item, object.__getattribute__(type(owner), item).type)
         return super().__getitem__(item)
 
     def __setitem__(self, key, value):
         owner = self.__owner
         if key in owner.redirect_model_fields():
-            owner.__redirect_set_value__(key, value, type(value))
-            # owner.__redirect_set_value__(key, value, object.__getattribute__(type(owner), key).type)
+            owner.__redirect_set_value__(key, value, object.__getattribute__(type(owner), key).type)
         else:
             super().__setitem__(key, value)
 
@@ -71,7 +69,7 @@ class RedirectDict(dict):
 
     def values(self):
         owner = self.__owner
-        return [owner.__redirect_get_value__(k, None) for k in self.keys()]
+        return [owner.__redirect_get_value__(k, object.__getattribute__(type(owner), k).type) for k in self.keys()]
 
     def items(self):
         return zip(self.keys(), self.values())
