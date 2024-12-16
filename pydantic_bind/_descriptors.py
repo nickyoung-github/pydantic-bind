@@ -50,8 +50,7 @@ class DictDescriptor:
 
         if value:
             cls = type(instance)
-            values = {k: (v, type(v)) for k, v in value.items()}
-            # values = {k: (v, object.__getattribute__(cls, k).type) for k, v in value.items()}
+            values = {k: (v, object.__getattribute__(cls, k).type) for k, v in value.items()}
             instance.__redirect_set_values__(values)
 
         return dict_
