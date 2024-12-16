@@ -39,9 +39,10 @@ class DictDescriptor:
         return cls.__obj_dict_ptr
 
     def __set_dict(self, instance: Redirector, value: dict[str, Any]) -> dict:
-        dict_ = RedirectDict(instance)
         dict_contents = self.__dict_ptr()(instance).contents
         prev = dict_contents.value if dict_contents else None
+
+        dict_ = RedirectDict(instance)
         Py_INCREF(dict_)
         dict_contents.value = dict_
 
