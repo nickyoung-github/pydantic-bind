@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pydantic-bind"
+description = "Bindings for Pydantic and Dataclass Objects"
+authors = [
+    {name = "Nick Young", email = "nick.young.github@gmail.com"}
+]
+readme = "README.md"
+license = {file = "LICENSE"}
+
+requires-python = ">=3.11"
+
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python 3",
+    "Operating System :: OS Independent"
+]
+
+dynamic = ["entry-points", "version"]
+
+dependencies = [
+    "pybind11",
+    "pydantic",
+    "setuptools"
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-cov"
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "pydantic_bind.__init__.__version__"}

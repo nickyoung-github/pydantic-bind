@@ -1,20 +1,19 @@
 from argparse import ArgumentParser
 from collections.abc import Mapping, Sequence
-from dataclasses import MISSING, is_dataclass
+from dataclasses import MISSING, is_dataclass, fields
 import datetime as dt
 from enum import Enum, EnumType
 from itertools import chain
 from importlib import import_module
 from inspect import isclass
 from pathlib import Path
-from pydantic import BaseModel as PydanticBaseModel
-from pydantic._internal._model_construction import ModelMetaclass
 from pydantic_core import PydanticUndefined
 from textwrap import TextWrapper
 from types import UnionType
 from typing import Any, Optional, Set, Tuple, Union, get_args, get_origin
 
-from pydantic_bind.base import BaseModel, field_info_iter
+from ._dataclasses import PybindDataclass
+from ._pydantic import PybindBaseModel
 
 __base_type_mappings = {
     bool: ("bool", None),
@@ -32,6 +31,15 @@ __no_move_types = {
 }
 
 NoneT = type(None)
+
+
+def field_info_iter(typ: type[PybindBaseModel] | type[PybindDataclass]):
+    if issubclass(typ, PybindBaseModel):
+        for field_name, field in typ.model_fields.items():
+            yield field_name, field.annotation, field.default
+    elif issubclass(typ, PybindDataclass):
+        for fld in fields(typ):
+            yield fld.name, fld.type, fld.default
 
 
 def cpp_default(value: Any) -> str | None:
@@ -98,7 +106,7 @@ def cpp_type(typ) -> Tuple[str, Set[str], Set[str]]:
                     origin = typ
                 else:
                     raise RuntimeError(f"Cannot use non parameterised collection {typ} as a type")
-            elif issubclass(typ, PydanticBaseModel) or is_dataclass(typ) or issubclass(typ, Enum):
+            elif issubclass(typ, (PybindDataclass, PybindBaseModel)) or issubclass(typ, Enum):
                 using = "::".join(chain(typ.__module__.split('.')[:-1], (typ.__name__,)))
                 return typ.__name__, {f'"{typ.__module__.replace(dot, slash)}.h"'}, {using}
             else:
@@ -135,7 +143,7 @@ def cpp_type(typ) -> Tuple[str, Set[str], Set[str]]:
             raise RuntimeError(f"Cannot handle type {typ}")
 
 
-def class_attrs(model_class: ModelMetaclass):
+def class_attrs(model_class):
     types = []
     kwargs = []
     constructor_args = []
@@ -151,8 +159,7 @@ def class_attrs(model_class: ModelMetaclass):
     all_includes = {'"msgpack/msgpack.h"'}
     all_usings = set()
     bases = [b for b in model_class.__bases__
-             if b not in (BaseModel, PydanticBaseModel) and issubclass(b, BaseModel)
-             and b.__pydantic_decorators__.computed_fields]
+             if b not in (PybindDataclass, PybindBaseModel) and issubclass(b, (PybindDataclass, PybindBaseModel))]
     base_field_names = set(chain.from_iterable((n for n, _, _ in field_info_iter(b)) for b in bases))
     needs_default_constructor = False
 
@@ -191,7 +198,7 @@ def class_attrs(model_class: ModelMetaclass):
         types, kwargs, struct_members, pydantic_attrs, all_includes, all_usings
 
 
-def generate_class(model_class: ModelMetaclass, indent_size: int = 0, max_width: int = 110) -> \
+def generate_class(model_class, indent_size: int = 0, max_width: int = 110) -> \
         Tuple[Optional[str], Optional[str], Optional[Set[str]], Optional[Set[str]]]:
 
     names, constructor_args, init_args, default_init_args, base_init, types, kwargs, struct_members, pydantic_attrs, \
@@ -308,7 +315,7 @@ def generate_module(module_name: str, output_dir: str, indent_size: int = 4, max
             enum_def, pydantic_def = generate_enum(clz, indent_size, max_width)
             enum_defs.append(enum_def)
             pydantic_defs.append(pydantic_def)
-        elif is_dataclass(clz) or issubclass(clz, BaseModel):
+        elif issubclass(clz, (PybindDataclass, PybindBaseModel)):
             struct_def, pydantic_def, struct_includes, struct_usings = \
                 generate_class(clz, indent_size, max_width=max_width)
             if struct_def:
