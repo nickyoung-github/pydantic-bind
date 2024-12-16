@@ -14,30 +14,49 @@
 
 
 ## Overview
+[WORK IN PROGRESS!!!]
 
-Python is the language of choice for  finance, data science etc. Python calling C++ (and increasingly, Rust) is a
-common pattern, leveraging packages such as
-[pybind11](https://pybind11.readthedocs.io/en/stable/index.html) .
+Have you ever been working in Python and wanted to use dataclasses or pydantic objects for your data model, but are
+stuck with existing data representation? This could arise a few ways:
 
-A common problem is a how best to represent data to be shared between python and C++ code. One would like idiomatic
-representations in each language and this may be necessary to fully utilise certain python packages. E.g.,
-[FastAPI](https://fastapi.tiangolo.com) is a popular way to create REST services, using Open API definitions derived
-from [pydantic](https://docs.pydantic.dev/latest/) classes. Therefore, a data model authored using pydantic classes,
-or native python dataclasses, from which sensible C++ structs and appropriate marshalling can automatically be
-generated, is desirable.
+1. Ill-conceived classes, with getFoo(), setFoo() ... or worse ... getAttribute(), setAttribute() type methods,
+created by misguided Java programmers, accessing an opaque data schema
+2. Hideous, non-python generated code (see protobufs and Avro), which you would like to wrap but keep the internal
+data structure
+3. A data representation in another language, e.g. a C++ object, exposed via pybind, that would like to appear like
+a dataclass
 
-This package provides such tools: a cmake rule allows you to generate C++ structs (with msgpack serialisation) and
-corresponding pybind11 bindings.
+If none of this rings any bells, then read no further and spare your braincells!
 
-Python functions allow you to naviagte between the C++ pybind11 objects and the native python objects. There is also an
-option for all python operations to be directed to an owned pybind11 object (see [No Copy](#No-Copy)).
+First of all, it's worth noting the motivation for this project. Dataclasses, pydantic objects and MsgStruct give you
+access to some pretty nice functionlity (such as JSON schemas and serialisation) and interact seamlessly with
+countless other packages. What I wanted was a way to define my datamodel as datclasses/pydantic (maybe MsgStruct in
+future) and have it redirect attribute access through to some existing data representation.
 
-Note that the typcal python developer experience is now somewhat changed, in that it's necessary to build/install
-the project. I personally use JetBrains CLion, in place of PyCharm for such projects.
+Sounds pretty easy, right: python is infintely flexible? Yes and no - it is the degrees of flexibility and different
+ways that attribute access can occur which make things tricky.
 
-For an example of the kind of behaviour-less object model this package is intended to help,
-please see (the rather nascent) [fin-data-model](https://github.com/nickyoung-github/fin-data-model)
+### Python Attribute Access
 
+Getting and setting attributes in python can happen via:
+
+1. `__getattribute__()` and `__setattr__()`. Under the covers these functions do either:
+- Find a descriptor on the class object and call `__get__` or `__set__`
+- For an ordinary field, set via the class instance's `__dict__`
+2. Directly alter the object instance's `__dict__`
+- Set `__dict__`, e.g. `foo.__dict__ = {"a": 1, "b": "foo"}`
+- Mutate `__dict__`, e.g., `foo.__dict__["a"] = 2`
+
+After a lot of experimentation and much infinite recursion, I decided on the following approach:
+1. Create a metaclass to replace all the model fields with descriptors per field (to handle `object.__getattribute__()/
+__setattr__()` usage)
+2. Add a descriptor for `__dict__`
+3. Create a small derivation of `__dict__`, which redirects `__getitem__()/__setitem__()` calls for model fields
+
+This seems to cover all cases
+
+
+[ANYTHING BELOW HERE IS OLD AND NEEDS TO BE UPDATED]
 
 ## Getting Started
 
